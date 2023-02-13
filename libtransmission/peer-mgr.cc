@@ -45,7 +45,9 @@
 #include "libtransmission/torrent.h"
 #include "libtransmission/torrent-magnet.h"
 #include "libtransmission/tr-assert.h"
+#ifdef WITH_UTP
 #include "libtransmission/tr-utp.h"
+#endif
 #include "libtransmission/utils.h"
 #include "libtransmission/webseed.h"
 

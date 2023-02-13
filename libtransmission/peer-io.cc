@@ -13,7 +13,9 @@
 #include <event2/event.h>
 #include <event2/bufferevent.h>
 
+#ifdef WITH_UTP
 #include <libutp/utp.h>
+#endif
 
 #include <fmt/core.h>
 
@@ -25,8 +27,11 @@
 #include "libtransmission/net.h"
 #include "libtransmission/peer-io.h"
 #include "libtransmission/tr-assert.h"
+#ifdef WITH_UTP
 #include "libtransmission/tr-utp.h"
+#endif
 #include "libtransmission/utils.h" // for _()
+
 
 #ifdef _WIN32
 #undef EAGAIN
@@ -117,7 +122,7 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing(
     tr_port port,
     tr_sha1_digest_t const& info_hash,
     bool is_seed,
-    bool utp)
+    [[maybe_unused]] bool utp)
 {
     TR_ASSERT(!tr_peer_socket::limit_reached(session));
     TR_ASSERT(session != nullptr);
@@ -704,11 +709,8 @@ void tr_peerIo::on_utp_error(int errcode)
     tr_error_clear(&error);
 }
 
-#endif /* #ifdef WITH_UTP */
-
 void tr_peerIo::utp_init([[maybe_unused]] struct_utp_context* ctx)
 {
-#ifdef WITH_UTP
     utp_context_set_option(ctx, UTP_RCVBUF, RcvBuf);
 
     // note: all the callback handlers here need to check `userdata` for nullptr
@@ -785,5 +787,5 @@ void tr_peerIo::utp_init([[maybe_unused]] struct_utp_context* ctx)
             }
             return {};
         });
-#endif
 }
+#endif /* #ifdef WITH_UTP */
