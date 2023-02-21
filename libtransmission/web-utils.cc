@@ -15,8 +15,10 @@
 
 #include <fmt/core.h>
 
+#ifdef WITH_PSL
 #define PSL_STATIC
 #include <libpsl.h>
+#endif
 
 #include "libtransmission/log.h"
 #include "libtransmission/net.h"
@@ -227,6 +229,7 @@ bool tr_isValidTrackerScheme(std::string_view scheme)
     return std::find(std::begin(Schemes), std::end(Schemes), scheme) != std::end(Schemes);
 }
 
+#ifdef WITH_PSL
 bool isAsciiNonUpperCase(std::string_view host)
 {
     return std::all_of(
@@ -234,12 +237,14 @@ bool isAsciiNonUpperCase(std::string_view host)
         std::end(host),
         [](unsigned char ch) { return (ch < 128) && (std::isupper(ch) == 0); });
 }
+#endif
 
 // www.example.com -> example
 // www.example.co.uk -> example
 // 127.0.0.1 -> 127.0.0.1
 std::string_view getSiteName(std::string_view host)
 {
+#ifdef WITH_PSL
     // is it empty?
     if (std::empty(host))
     {
@@ -287,6 +292,7 @@ std::string_view getSiteName(std::string_view host)
     {
         host = host.substr(0, dot_pos);
     }
+#endif
 
     return host;
 }
