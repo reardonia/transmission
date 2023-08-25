@@ -99,9 +99,10 @@ namespace
 auto const AppIconName = "transmission"sv; // TODO(C++20): Use ""s
 
 char const* const LICENSE =
-    "Copyright 2005-2022. All code is copyrighted by the respective authors.\n"
+    "Copyright 2005-2023. All code is copyrighted by the respective authors.\n"
     "\n"
     "Transmission can be redistributed and/or modified under the terms of the "
+    "GNU GPL, versions 2 or 3, or by any future license endorsed by Mnemosyne LLC."
     "\n"
     "In addition, linking to and/or using OpenSSL is allowed.\n"
     "\n"
@@ -117,7 +118,7 @@ char const* const LICENSE =
 class Application::Impl
 {
 public:
-    Impl(Application& app, std::string const& config_dir, bool start_paused, bool is_iconified);
+    Impl(Application& app, std::string const& config_dir, bool start_paused, bool start_iconified);
     ~Impl() = default;
 
     TR_DISABLE_COPY_MOVE(Impl)
@@ -205,8 +206,9 @@ private:
 private:
     Application& app_;
 
-    std::string config_dir_;
-    bool start_paused_ = false;
+    std::string const config_dir_;
+    bool const start_paused_;
+    bool const start_iconified_;
     bool is_iconified_ = false;
     bool is_closing_ = false;
 
@@ -346,8 +348,9 @@ bool Application::Impl::refresh_actions()
         gtr_action_set_sensitive("open-torrent-folder", sel_counts.total_count == 1);
         gtr_action_set_sensitive("copy-magnet-link-to-clipboard", sel_counts.total_count == 1);
 
-        bool const can_update = wind_->for_each_selected_torrent_until(
-            [](auto const& torrent) { return tr_torrentCanManualUpdate(&torrent->get_underlying()); });
+        bool const can_update = wind_ != nullptr &&
+            wind_->for_each_selected_torrent_until([](auto const& torrent)
+                                                   { return tr_torrentCanManualUpdate(&torrent->get_underlying()); });
         gtr_action_set_sensitive("torrent-reannounce", can_update);
     }
 
@@ -393,7 +396,7 @@ void register_magnet_link_handler()
             _("Couldn't register Transmission as a {content_type} handler: {error} ({error_code})"),
             fmt::arg("content_type", content_type),
             fmt::arg("error", e.what()),
-            fmt::arg("error_code", e.code())));
+            fmt::arg("error_code", static_cast<int>(e.code()))));
     }
 }
 
@@ -479,15 +482,14 @@ bool Application::Impl::on_rpc_changed_idle(tr_rpc_callback_type type, tr_torren
             tr_variantInitDict(&tmp, 100);
             tr_sessionGetSettings(session, &tmp);
 
+            auto const serde = tr_variant_serde::benc();
             for (int i = 0; tr_variantDictChild(&tmp, i, &key, &newval); ++i)
             {
                 bool changed = true;
 
                 if (tr_variant const* oldval = tr_variantDictFind(oldvals, key); oldval != nullptr)
                 {
-                    auto const a = tr_variantToStr(oldval, TR_VARIANT_FMT_BENC);
-                    auto const b = tr_variantToStr(newval, TR_VARIANT_FMT_BENC);
-                    changed = a != b;
+                    changed = serde.to_string(*oldval) != serde.to_string(*newval);
                 }
 
                 if (changed)
@@ -502,8 +504,6 @@ bool Application::Impl::on_rpc_changed_idle(tr_rpc_callback_type type, tr_torren
             {
                 core_->signal_prefs_changed().emit(changed_key);
             }
-
-            tr_variantClear(&tmp);
             break;
         }
 
@@ -582,8 +582,8 @@ void Application::Impl::on_startup()
         css_provider,
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
-    std::ignore = FilterBar();
-    std::ignore = PathButton();
+    FilterBar();
+    PathButton();
 
     tr_session* session = nullptr;
 
@@ -669,7 +669,7 @@ void Application::Impl::on_activate()
     /* GApplication emits an 'activate' signal when bootstrapping the primary.
      * Ordinarily we handle that by presenting the main window, but if the user
      * started Transmission minimized, ignore that initial signal... */
-    if (is_iconified_ && activation_count_ == 1)
+    if (start_iconified_ && activation_count_ == 1)
     {
         return;
     }
@@ -705,19 +705,19 @@ std::string get_application_id(std::string const& config_dir)
 
 } // namespace
 
-Application::Application(std::string const& config_dir, bool start_paused, bool is_iconified)
+Application::Application(std::string const& config_dir, bool start_paused, bool start_iconified)
     : Gtk::Application(get_application_id(config_dir), TR_GIO_APPLICATION_FLAGS(HANDLES_OPEN))
-    , impl_(std::make_unique<Impl>(*this, config_dir, start_paused, is_iconified))
+    , impl_(std::make_unique<Impl>(*this, config_dir, start_paused, start_iconified))
 {
 }
 
 Application::~Application() = default;
 
-Application::Impl::Impl(Application& app, std::string const& config_dir, bool start_paused, bool is_iconified)
+Application::Impl::Impl(Application& app, std::string const& config_dir, bool start_paused, bool start_iconified)
     : app_(app)
     , config_dir_(config_dir)
     , start_paused_(start_paused)
-    , is_iconified_(is_iconified)
+    , start_iconified_(start_iconified)
 {
 }
 
@@ -728,7 +728,7 @@ void Application::Impl::on_core_busy(bool busy)
 
 void Application::Impl::app_setup()
 {
-    if (is_iconified_)
+    if (start_iconified_)
     {
         gtr_pref_flag_set(TR_KEY_show_notification_area_icon, true);
     }
@@ -758,7 +758,7 @@ void Application::Impl::app_setup()
     update_model_once();
 
     /* either show the window or iconify it */
-    if (!is_iconified_)
+    if (!start_iconified_)
     {
         wind_->show();
         gtr_action_set_toggled("toggle-main-window", true);
@@ -766,7 +766,6 @@ void Application::Impl::app_setup()
     else
     {
         gtr_window_set_skip_taskbar_hint(*wind_, icon_ != nullptr);
-        is_iconified_ = false; // ensure that the next toggle iconifies
         gtr_action_set_toggled("toggle-main-window", false);
     }
 
@@ -1452,7 +1451,6 @@ bool Application::Impl::call_rpc_for_selected_torrents(std::string const& method
         invoked = true;
     }
 
-    tr_variantClear(&top);
     return invoked;
 }
 
@@ -1472,7 +1470,6 @@ void Application::Impl::start_all_torrents()
     tr_variantInitDict(&request, 1);
     tr_variantDictAddStrView(&request, TR_KEY_method, "torrent-start"sv);
     tr_rpc_request_exec_json(session, &request, nullptr, nullptr);
-    tr_variantClear(&request);
 }
 
 void Application::Impl::pause_all_torrents()
@@ -1483,7 +1480,6 @@ void Application::Impl::pause_all_torrents()
     tr_variantInitDict(&request, 1);
     tr_variantDictAddStrView(&request, TR_KEY_method, "torrent-stop"sv);
     tr_rpc_request_exec_json(session, &request, nullptr, nullptr);
-    tr_variantClear(&request);
 }
 
 void Application::Impl::copy_magnet_link_to_clipboard(Glib::RefPtr<Torrent> const& torrent) const

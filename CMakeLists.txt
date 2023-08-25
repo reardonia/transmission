@@ -3,9 +3,12 @@ cmake_minimum_required(VERSION 3.12 FATAL_ERROR)
 if(POLICY CMP0092)
     cmake_policy(SET CMP0092 NEW)
 endif()
+if(POLICY CMP0114)
+    cmake_policy(SET CMP0114 NEW)
+endif()
 
 # Value should follow latest stable Xcode's RECOMMENDED_MACOSX_DEPLOYMENT_TARGET
-set(MACOS_SUPPORT_MINIMUM 10.13)
+set(MACOS_SUPPORT_MINIMUM 10.14.6)
 
 # The value of this variable should be set prior to the first project() command invocation.
 # See: https://cmake.org/cmake/help/latest/variable/CMAKE_OSX_DEPLOYMENT_TARGET.html
@@ -35,7 +38,8 @@ set(DEFLATE_MINIMUM 1.7)
 set(EVENT2_MINIMUM 2.1.0)
 set(GIOMM_MINIMUM 2.26.0)
 set(GLIBMM_MINIMUM 2.60.0)
-set(GTKMM_MINIMUM 3.24.0)
+set(GTKMM3_MINIMUM 3.24.0)
+set(GTKMM4_MINIMUM 4.11.1)
 set(OPENSSL_MINIMUM 0.9.7)
 set(MBEDTLS_MINIMUM 1.3)
 set(NPM_MINIMUM 8.1.307) # Node.js 14
@@ -56,6 +60,7 @@ option(ENABLE_WERROR "Treat warnings as errors" OFF)
 option(ENABLE_NLS "Enable native language support" ON)
 option(INSTALL_DOC "Build/install documentation" ON)
 option(INSTALL_LIB "Install the library" OFF)
+tr_auto_option(ENABLE_DEPRECATED "Allow deprecated API use of upstream packages, e.g. GTK" AUTO)
 tr_auto_option(RUN_CLANG_TIDY "Run clang-tidy on the code" OFF)
 tr_auto_option(USE_SYSTEM_EVENT2 "Use system event2 library" AUTO)
 tr_auto_option(USE_SYSTEM_DEFLATE "Use system deflate library" AUTO)
@@ -80,8 +85,8 @@ set(TR_NAME ${PROJECT_NAME})
 
 # these should be the only five lines you need to change
 set(TR_VERSION_MAJOR "4")
-set(TR_VERSION_MINOR "0")
-set(TR_VERSION_PATCH "1")
+set(TR_VERSION_MINOR "1")
+set(TR_VERSION_PATCH "0")
 set(TR_VERSION_BETA_NUMBER "") # empty string for not beta
 set(TR_VERSION_DEV TRUE)
 
@@ -200,11 +205,12 @@ if(WIN32)
 endif()
 
 set(CMAKE_FOLDER "third-party")
-
-find_package(Fmt)
-find_package(WideInteger)
 find_package(FastFloat)
+find_package(Fmt)
+find_package(Small)
 find_package(UtfCpp)
+find_package(WideInteger)
+
 find_package(Threads)
 find_package(PkgConfig QUIET)
 
@@ -213,6 +219,14 @@ if(NOT TARGET CURL::libcurl)
     add_library(CURL::libcurl INTERFACE IMPORTED)
     target_link_libraries(CURL::libcurl INTERFACE ${CURL_LIBRARIES})
     target_include_directories(CURL::libcurl INTERFACE ${CURL_INCLUDE_DIRS})
+endif()
+
+if(ENABLE_DEPRECATED STREQUAL "AUTO")
+    if(DEFINED ENV{CI})
+        set(ENABLE_DEPRECATED OFF)
+    else()
+        set(ENABLE_DEPRECATED ON)
+    endif()
 endif()
 
 set(CRYPTO_PKG "")
@@ -284,7 +298,7 @@ if(ENABLE_GTK)
 
     if(USE_GTK_VERSION STREQUAL "AUTO" OR USE_GTK_VERSION EQUAL 4)
         pkg_check_modules(GTK4
-            gtkmm-4.0>=${GTKMM_MINIMUM}
+            gtkmm-4.0>=${GTKMM4_MINIMUM}
             glibmm-2.68>=${GLIBMM_MINIMUM}
             giomm-2.68>=${GIOMM_MINIMUM})
         set(GTK_VERSION 4)
@@ -293,7 +307,7 @@ if(ENABLE_GTK)
 
     if(NOT GTK_FOUND AND (USE_GTK_VERSION STREQUAL "AUTO" OR USE_GTK_VERSION EQUAL 3))
         pkg_check_modules(GTK3
-            gtkmm-3.0>=${GTKMM_MINIMUM}
+            gtkmm-3.0>=${GTKMM3_MINIMUM}
             glibmm-2.4>=${GLIBMM_MINIMUM}
             giomm-2.4>=${GIOMM_MINIMUM})
         set(GTK_VERSION 3)
