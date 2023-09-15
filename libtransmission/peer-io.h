@@ -29,7 +29,10 @@
 #include "libtransmission/tr-macros.h" // tr_sha1_digest_t, TR_CONSTEXPR20
 #include "libtransmission/utils-ev.h"
 
+#ifdef WITH_UTP
 struct struct_utp_context;
+#endif
+
 struct tr_error;
 struct tr_session;
 
@@ -292,7 +295,9 @@ public:
 
     ///
 
+#ifdef WITH_UTP
     static void utp_init(struct_utp_context* ctx);
+#endif
 
 private:
     // Our target socket receive buffer size.
@@ -319,8 +324,10 @@ private:
         }
     }
 
+#ifdef WITH_UTP
     void on_utp_state_change(int new_state);
     void on_utp_error(int errcode);
+#endif
 
     void close();
 

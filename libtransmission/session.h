@@ -70,7 +70,9 @@ class tr_peer_socket;
 struct tr_pex;
 class tr_rpc_server;
 struct tr_torrent;
+#ifdef WITH_UTP
 struct struct_utp_context;
+#endif
 struct tr_variant;
 
 namespace libtransmission
@@ -1157,7 +1159,9 @@ private:
 
 public:
     // depends-on: udp_core_
+#ifdef WITH_UTP
     struct struct_utp_context* utp_context = nullptr;
+#endif
 
 private:
     // depends-on: open_files_
@@ -1214,7 +1218,9 @@ private:
     std::unique_ptr<tr_verify_worker> verifier_ = std::make_unique<tr_verify_worker>();
 
 public:
+#ifdef WITH_UTP
     std::unique_ptr<libtransmission::Timer> utp_timer;
+#endif
 };
 
 constexpr bool tr_isPriority(tr_priority_t p)

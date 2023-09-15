@@ -15,7 +15,9 @@
 
 #include <event2/event.h>
 
+#ifdef WITH_UTP
 #include <libutp/utp.h>
+#endif
 
 #include <fmt/core.h>
 
@@ -122,7 +124,7 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing(
     tr_socket_address const& socket_address,
     tr_sha1_digest_t const& info_hash,
     bool is_seed,
-    bool utp)
+    [[maybe_unused]] bool utp)
 {
     auto const& [addr, port] = socket_address;
 
@@ -674,11 +676,8 @@ void tr_peerIo::on_utp_error(int errcode)
     tr_error_clear(&error);
 }
 
-#endif /* #ifdef WITH_UTP */
-
 void tr_peerIo::utp_init([[maybe_unused]] struct_utp_context* ctx)
 {
-#ifdef WITH_UTP
     utp_context_set_option(ctx, UTP_RCVBUF, RcvBuf);
 
     // note: all the callback handlers here need to check `userdata` for nullptr
@@ -755,5 +754,5 @@ void tr_peerIo::utp_init([[maybe_unused]] struct_utp_context* ctx)
             }
             return {};
         });
-#endif
 }
+#endif /* #ifdef WITH_UTP */

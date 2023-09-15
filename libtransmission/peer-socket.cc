@@ -5,7 +5,9 @@
 
 #include <fmt/core.h>
 
+#ifdef WITH_UTP
 #include <libutp/utp.h>
+#endif
 
 #include "libtransmission/transmission.h"
 
@@ -36,6 +38,7 @@ tr_peer_socket::tr_peer_socket(tr_session const* session, tr_socket_address cons
     tr_logAddTraceIo(this, fmt::format("socket (tcp) is {}", handle.tcp));
 }
 
+#ifdef WITH_UTP
 tr_peer_socket::tr_peer_socket(tr_socket_address const& socket_address, struct UTPSocket* const sock)
     : socket_address_{ socket_address }
     , type_{ Type::UTP }
@@ -47,6 +50,7 @@ tr_peer_socket::tr_peer_socket(tr_socket_address const& socket_address, struct U
 
     tr_logAddTraceIo(this, fmt::format("socket (µTP) is {}", fmt::ptr(handle.utp)));
 }
+#endif
 
 void tr_peer_socket::close()
 {

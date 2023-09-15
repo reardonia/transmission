@@ -224,12 +224,12 @@ target_compile_definitions(${TR_NAME}
         PACKAGE_DATA_DIR="${CMAKE_INSTALL_FULL_DATAROOTDIR}"
         $<$<BOOL:${WITH_INOTIFY}>:WITH_INOTIFY>
         $<$<BOOL:${WITH_KQUEUE}>:WITH_KQUEUE>
-        $<$<BOOL:${ENABLE_UTP}>:WITH_UTP>
         $<$<VERSION_LESS:${MINIUPNPC_VERSION},1.7>:MINIUPNPC_API_VERSION=${MINIUPNPC_API_VERSION}> # API version macro was only added in 1.7
         $<$<BOOL:${USE_SYSTEM_B64}>:USE_SYSTEM_B64>
         $<$<BOOL:${HAVE_SO_REUSEPORT}>:HAVE_SO_REUSEPORT=1>
     PUBLIC
         $<$<BOOL:${ENABLE_PSL}>:WITH_PSL>
+        $<$<BOOL:${ENABLE_UTP}>:WITH_UTP>
         $<$<NOT:$<BOOL:${ENABLE_NLS}>>:DISABLE_GETTEXT>)
 
 tr_target_compile_definitions_for_headers(${TR_NAME}
@@ -282,7 +282,7 @@ target_link_libraries(${TR_NAME}
         natpmp::natpmp
         miniupnpc::libminiupnpc
         dht::dht
-        libutp::libutp
+        $<$<BOOL:${ENABLE_UTP}>:libutp::libutp>
         libb64::libb64
         ${LIBINTL_LIBRARY}
         ${LIBM_LIBRARY}

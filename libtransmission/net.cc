@@ -32,7 +32,9 @@
 #include "libtransmission/session.h"
 #include "libtransmission/tr-assert.h"
 #include "libtransmission/tr-macros.h"
+#ifdef WITH_UTP
 #include "libtransmission/tr-utp.h"
+#endif
 #include "libtransmission/utils.h"
 
 using namespace std::literals;
