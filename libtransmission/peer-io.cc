@@ -444,7 +444,7 @@ size_t tr_peerIo::try_read(size_t max)
 
     // Do not write more than the bandwidth allows.
     // If there is no bandwidth left available, disable writes.
-    max = bandwidth().clamp(TR_DOWN, max);
+    max = bandwidth().clamp(Dir, max);
     if (max == 0)
     {
         set_enabled(Dir, false);
@@ -611,6 +611,33 @@ size_t tr_peerIo::get_write_buffer_space(uint64_t now) const noexcept
 
 // ---
 
+void tr_peerIo::read_bytes(void* bytes, size_t n_bytes)
+{
+    auto walk = reinterpret_cast<std::byte*>(bytes);
+    n_bytes = std::min(n_bytes, std::size(inbuf_));
+    if (decrypt_remain_len_)
+    {
+        if (*decrypt_remain_len_ <= n_bytes)
+        {
+            filter_.decrypt(std::data(inbuf_), *decrypt_remain_len_, walk);
+            inbuf_.drain(*decrypt_remain_len_);
+            if (walk != nullptr)
+            {
+                walk += *decrypt_remain_len_;
+            }
+            n_bytes -= *decrypt_remain_len_;
+            filter_.decrypt_disable();
+            decrypt_remain_len_.reset();
+        }
+        else
+        {
+            *decrypt_remain_len_ -= n_bytes;
+        }
+    }
+    filter_.decrypt(std::data(inbuf_), n_bytes, walk);
+    inbuf_.drain(n_bytes);
+}
+
 void tr_peerIo::read_uint16(uint16_t* setme)
 {
     auto tmp = uint16_t{};
@@ -623,18 +650,6 @@ void tr_peerIo::read_uint32(uint32_t* setme)
     auto tmp = uint32_t{};
     read_bytes(&tmp, sizeof(tmp));
     *setme = ntohl(tmp);
-}
-
-void tr_peerIo::read_buffer_drain(size_t byte_count)
-{
-    auto buf = std::array<char, 4096>{};
-
-    while (byte_count > 0)
-    {
-        auto const this_pass = std::min(byte_count, std::size(buf));
-        read_bytes(std::data(buf), this_pass);
-        byte_count -= this_pass;
-    }
 }
 
 // --- UTP
