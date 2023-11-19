@@ -1,4 +1,4 @@
-// This file Copyright © 2009-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -7,6 +7,7 @@
 #include <array>
 #include <cerrno> // EINVAL
 #include <climits> /* INT_MAX */
+#include <cstddef> // size_t
 #include <ctime>
 #include <map>
 #include <sstream>
@@ -14,13 +15,6 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-
-#ifndef _WIN32
-#include <sys/wait.h> /* wait() */
-#include <unistd.h> /* fork(), execvp(), _exit() */
-#else
-#include <windows.h> /* CreateProcess(), GetLastError() */
-#endif
 
 #include <fmt/chrono.h>
 #include <fmt/core.h>
@@ -47,24 +41,59 @@
 #include "libtransmission/torrent-metainfo.h"
 #include "libtransmission/torrent.h"
 #include "libtransmission/tr-assert.h"
+#include "libtransmission/tr-strbuf.h"
 #include "libtransmission/utils.h"
 #include "libtransmission/version.h"
 #include "libtransmission/web-utils.h"
 
+struct tr_ctor;
+
 using namespace std::literals;
+using namespace libtransmission::Values;
+
+// ---
+
+void tr_torrent::Error::set_tracker_warning(tr_interned_string announce_url, std::string_view errmsg)
+{
+    announce_url_ = announce_url;
+    errmsg_.assign(errmsg);
+    error_type_ = TR_STAT_TRACKER_WARNING;
+}
+
+void tr_torrent::Error::set_tracker_error(tr_interned_string announce_url, std::string_view errmsg)
+{
+    announce_url_ = announce_url;
+    errmsg_.assign(errmsg);
+    error_type_ = TR_STAT_TRACKER_ERROR;
+}
+
+void tr_torrent::Error::set_local_error(std::string_view errmsg)
+{
+    announce_url_.clear();
+    errmsg_.assign(errmsg);
+    error_type_ = TR_STAT_LOCAL_ERROR;
+}
+
+void tr_torrent::Error::clear() noexcept
+{
+    announce_url_.clear();
+    errmsg_.clear();
+    error_type_ = TR_STAT_OK;
+}
+
+void tr_torrent::Error::clear_if_tracker() noexcept
+{
+    if (error_type_ == TR_STAT_TRACKER_WARNING || error_type_ == TR_STAT_TRACKER_ERROR)
+    {
+        clear();
+    }
+}
 
 // ---
 
 char const* tr_torrentName(tr_torrent const* tor)
 {
     return tor != nullptr ? tor->name().c_str() : "";
-}
-
-uint64_t tr_torrentTotalSize(tr_torrent const* tor)
-{
-    TR_ASSERT(tr_isTorrent(tor));
-
-    return tor->total_size();
 }
 
 tr_torrent_id_t tr_torrentId(tr_torrent const* tor)
@@ -92,19 +121,6 @@ tr_torrent* tr_torrentFindFromMagnetLink(tr_session* session, char const* magnet
     return magnet_link == nullptr ? nullptr : session->torrents().get(magnet_link);
 }
 
-tr_torrent* tr_torrentFindFromObfuscatedHash(tr_session* session, tr_sha1_digest_t const& obfuscated_hash)
-{
-    for (auto* const tor : session->torrents())
-    {
-        if (tor->obfuscated_hash == obfuscated_hash)
-        {
-            return tor;
-        }
-    }
-
-    return nullptr;
-}
-
 bool tr_torrentSetMetainfoFromFile(tr_torrent* tor, tr_torrent_metainfo const* metainfo, char const* filename)
 {
     if (tr_torrentHasMetadata(tor))
@@ -112,18 +128,16 @@ bool tr_torrentSetMetainfoFromFile(tr_torrent* tor, tr_torrent_metainfo const* m
         return false;
     }
 
-    tr_error* error = nullptr;
+    auto error = tr_error{};
     tr_torrentUseMetainfoFromFile(tor, metainfo, filename, &error);
-
-    if (error != nullptr)
+    if (error)
     {
-        tor->set_local_error(fmt::format(
+        tor->error().set_local_error(fmt::format(
             _("Couldn't use metainfo from '{path}' for '{magnet}': {error} ({error_code})"),
             fmt::arg("path", filename),
             fmt::arg("magnet", tor->magnet()),
-            fmt::arg("error", error->message),
-            fmt::arg("error_code", error->code)));
-        tr_error_clear(&error);
+            fmt::arg("error", error.message()),
+            fmt::arg("error_code", error.code())));
         return false;
     }
 
@@ -134,16 +148,6 @@ bool tr_torrentSetMetainfoFromFile(tr_torrent* tor, tr_torrent_metainfo const* m
 
 namespace
 {
-constexpr void torrentSetQueued(tr_torrent* tor, bool queued)
-{
-    if (tor->is_queued_ != queued)
-    {
-        tor->is_queued_ = queued;
-        tor->mark_changed();
-        tor->set_dirty();
-    }
-}
-
 bool setLocalErrorIfFilesDisappeared(tr_torrent* tor, std::optional<bool> has_local_data = {})
 {
     auto const has = has_local_data ? *has_local_data : tor->has_any_local_data();
@@ -152,18 +156,11 @@ bool setLocalErrorIfFilesDisappeared(tr_torrent* tor, std::optional<bool> has_lo
     if (files_disappeared)
     {
         tr_logAddTraceTor(tor, "[LAZY] uh oh, the files disappeared");
-        tor->set_local_error(_(
+        tor->error().set_local_error(_(
             "No data found! Ensure your drives are connected or use \"Set Location\". To re-download, remove the torrent and re-add it."));
     }
 
     return files_disappeared;
-}
-
-void tr_torrentClearError(tr_torrent* tor)
-{
-    tor->error = TR_STAT_OK;
-    tor->error_announce_url.clear();
-    tor->error_string.clear();
 }
 
 /* returns true if the seed ratio applies --
@@ -176,7 +173,7 @@ bool tr_torrentGetSeedRatioBytes(tr_torrent const* tor, uint64_t* setme_left, ui
 
     if (auto const seed_ratio = tor->effective_seed_ratio(); seed_ratio)
     {
-        auto const uploaded = tor->uploadedCur + tor->uploadedPrev;
+        auto const uploaded = tor->bytes_uploaded_.ever();
         auto const baseline = tor->size_when_done();
         auto const goal = baseline * *seed_ratio;
 
@@ -205,20 +202,20 @@ bool tr_torrentIsSeedRatioDone(tr_torrent const* tor)
 
 // --- PER-TORRENT UL / DL SPEEDS
 
-void tr_torrentSetSpeedLimit_KBps(tr_torrent* tor, tr_direction dir, tr_kilobytes_per_second_t kilo_per_second)
+void tr_torrentSetSpeedLimit_KBps(tr_torrent* const tor, tr_direction const dir, size_t const limit_kbyps)
 {
-    tor->set_speed_limit_bps(dir, tr_toSpeedBytes(kilo_per_second));
+    tor->set_speed_limit(dir, Speed{ limit_kbyps, Speed::Units::KByps });
 }
 
-tr_kilobytes_per_second_t tr_torrentGetSpeedLimit_KBps(tr_torrent const* tor, tr_direction dir)
+size_t tr_torrentGetSpeedLimit_KBps(tr_torrent const* const tor, tr_direction const dir)
 {
     TR_ASSERT(tr_isTorrent(tor));
     TR_ASSERT(tr_isDirection(dir));
 
-    return tr_toSpeedKBps(tor->speed_limit_bps(dir));
+    return tor->speed_limit(dir).count(Speed::Units::KByps);
 }
 
-void tr_torrentUseSpeedLimit(tr_torrent* tor, tr_direction dir, bool enabled)
+void tr_torrentUseSpeedLimit(tr_torrent* const tor, tr_direction const dir, bool const enabled)
 {
     TR_ASSERT(tr_isTorrent(tor));
     TR_ASSERT(tr_isDirection(dir));
@@ -226,14 +223,14 @@ void tr_torrentUseSpeedLimit(tr_torrent* tor, tr_direction dir, bool enabled)
     tor->use_speed_limit(dir, enabled);
 }
 
-bool tr_torrentUsesSpeedLimit(tr_torrent const* tor, tr_direction dir)
+bool tr_torrentUsesSpeedLimit(tr_torrent const* const tor, tr_direction const dir)
 {
     TR_ASSERT(tr_isTorrent(tor));
 
     return tor->uses_speed_limit(dir);
 }
 
-void tr_torrentUseSessionLimits(tr_torrent* tor, bool enabled)
+void tr_torrentUseSessionLimits(tr_torrent* const tor, bool const enabled)
 {
     TR_ASSERT(tr_isTorrent(tor));
 
@@ -328,13 +325,13 @@ namespace
 {
 namespace script_helpers
 {
-[[nodiscard]] std::string buildLabelsString(tr_torrent const* tor)
+[[nodiscard]] std::string build_labels_string(tr_torrent::labels_t const& labels)
 {
     auto buf = std::stringstream{};
 
-    for (auto it = std::begin(tor->labels), end = std::end(tor->labels); it != end;)
+    for (auto it = std::begin(labels), end = std::end(labels); it != end;)
     {
-        buf << tr_quark_get_string_view(*it);
+        buf << it->sv();
 
         if (++it != end)
         {
@@ -375,9 +372,9 @@ void torrentCallScript(tr_torrent const* tor, std::string const& script)
     auto const cmd = std::array<char const*, 2>{ script.c_str(), nullptr };
 
     auto const id_str = std::to_string(tr_torrentId(tor));
-    auto const labels_str = buildLabelsString(tor);
+    auto const labels_str = build_labels_string(tor->labels());
     auto const trackers_str = buildTrackersString(tor);
-    auto const bytes_downloaded_str = std::to_string(tor->downloadedCur + tor->downloadedPrev);
+    auto const bytes_downloaded_str = std::to_string(tor->bytes_downloaded_.ever());
     auto const localtime_str = fmt::format("{:%a %b %d %T %Y%n}", fmt::localtime(tr_time()));
 
     auto const env = std::map<std::string_view, std::string_view>{
@@ -388,14 +385,13 @@ void torrentCallScript(tr_torrent const* tor, std::string const& script)
         { "TR_TORRENT_HASH"sv, tor->info_hash_string() },
         { "TR_TORRENT_ID"sv, id_str },
         { "TR_TORRENT_LABELS"sv, labels_str },
-        { "TR_TORRENT_NAME"sv, tr_torrentName(tor) },
+        { "TR_TORRENT_NAME"sv, tor->name() },
         { "TR_TORRENT_TRACKERS"sv, trackers_str },
     };
 
     tr_logAddInfoTor(tor, fmt::format(_("Calling script '{path}'"), fmt::arg("path", script)));
 
-    tr_error* error = nullptr;
-
+    auto error = tr_error{};
     if (!tr_spawn_async(std::data(cmd), env, TR_IF_WIN32("\\", "/"), &error))
     {
         tr_logAddWarnTor(
@@ -403,9 +399,8 @@ void torrentCallScript(tr_torrent const* tor, std::string const& script)
             fmt::format(
                 _("Couldn't call script '{path}': {error} ({error_code})"),
                 fmt::arg("path", script),
-                fmt::arg("error", error->message),
-                fmt::arg("error_code", error->code)));
-        tr_error_free(error);
+                fmt::arg("error", error.message()),
+                fmt::arg("error_code", error.code())));
     }
 }
 } // namespace script_helpers
@@ -453,7 +448,7 @@ void tr_torrentCheckSeedLimit(tr_torrent* tor)
     if (tr_torrentIsSeedRatioDone(tor))
     {
         tr_logAddInfoTor(tor, _("Seed ratio reached; pausing torrent"));
-        tor->is_stopping_ = true;
+        tor->stop_soon();
         tor->session->onRatioLimitHit(tor);
     }
     /* if we're seeding and reach our inactivity limit, stop the torrent */
@@ -461,7 +456,7 @@ void tr_torrentCheckSeedLimit(tr_torrent* tor)
     {
         tr_logAddInfoTor(tor, _("Seeding idle limit reached; pausing torrent"));
 
-        tor->is_stopping_ = true;
+        tor->stop_soon();
         tor->finished_seeding_by_idle_ = true;
         tor->session->onIdleLimitHit(tor);
     }
@@ -487,9 +482,9 @@ constexpr struct
 } CompareTorrentByQueuePosition{};
 
 #ifdef TR_ENABLE_ASSERTS
-bool queueIsSequenced(tr_session const* session)
+bool queueIsSequenced(tr_session const* const session)
 {
-    auto torrents = session->getAllTorrents();
+    auto torrents = session->torrents().get_all();
     std::sort(
         std::begin(torrents),
         std::end(torrents),
@@ -613,19 +608,16 @@ bool torrentShouldQueue(tr_torrent const* const tor)
 {
     tr_direction const dir = tor->queue_direction();
 
-    return tor->session->countQueueFreeSlots(dir) == 0;
+    return tor->session->count_queue_free_slots(dir) == 0;
 }
 
 void torrentResetTransferStats(tr_torrent* tor)
 {
     auto const lock = tor->unique_lock();
 
-    tor->downloadedPrev += tor->downloadedCur;
-    tor->downloadedCur = 0;
-    tor->uploadedPrev += tor->uploadedCur;
-    tor->uploadedCur = 0;
-    tor->corruptPrev += tor->corruptCur;
-    tor->corruptCur = 0;
+    tor->bytes_uploaded_.start_new_session();
+    tor->bytes_downloaded_.start_new_session();
+    tor->bytes_corrupt_.start_new_session();
 
     tor->set_dirty();
 }
@@ -637,7 +629,7 @@ void torrentStartImpl(tr_torrent* const tor)
     TR_ASSERT(tr_isTorrent(tor));
 
     tor->recheck_completeness();
-    torrentSetQueued(tor, false);
+    tor->set_is_queued(false);
 
     time_t const now = tr_time();
 
@@ -645,7 +637,7 @@ void torrentStartImpl(tr_torrent* const tor)
     tor->completeness = tor->completion.status();
     tor->startDate = now;
     tor->mark_changed();
-    tr_torrentClearError(tor);
+    tor->error().clear();
     tor->finished_seeding_by_idle_ = false;
 
     torrentResetTransferStats(tor);
@@ -654,7 +646,7 @@ void torrentStartImpl(tr_torrent* const tor)
     tor->started_.emit(tor);
 }
 
-bool removeTorrentFile(char const* filename, void* /*user_data*/, tr_error** error)
+bool removeTorrentFile(char const* filename, void* /*user_data*/, tr_error* error)
 {
     return tr_sys_path_remove(filename, error);
 }
@@ -667,7 +659,7 @@ void removeTorrentInSessionThread(tr_torrent* tor, bool delete_flag, tr_fileFunc
     {
         // ensure the files are all closed and idle before moving
         tor->session->closeTorrentFiles(tor);
-        tor->session->verifyRemove(tor);
+        tor->session->verify_remove(tor);
 
         if (delete_func == nullptr)
         {
@@ -759,7 +751,7 @@ void torrentStart(tr_torrent* tor, torrent_start_opts opts)
     case TR_STATUS_STOPPED:
         if (!opts.bypass_queue && torrentShouldQueue(tor))
         {
-            torrentSetQueued(tor, true);
+            tor->set_is_queued();
             return;
         }
 
@@ -783,36 +775,35 @@ void torrentStart(tr_torrent* tor, torrent_start_opts opts)
     tor->set_dirty();
     tor->session->runInSessionThread(torrentStartImpl, tor);
 }
-
-void torrentStop(tr_torrent* const tor)
-{
-    TR_ASSERT(tr_isTorrent(tor));
-    TR_ASSERT(tor->session->am_in_session_thread());
-    auto const lock = tor->unique_lock();
-
-    tor->is_running_ = false;
-    tor->is_stopping_ = false;
-
-    if (!tor->session->isClosing())
-    {
-        tr_logAddInfoTor(tor, _("Pausing torrent"));
-    }
-
-    tor->session->verifyRemove(tor);
-
-    tor->stopped_.emit(tor);
-    tor->session->announcer_->stopTorrent(tor);
-
-    tor->session->closeTorrentFiles(tor);
-
-    if (!tor->is_deleting_)
-    {
-        tr_torrentSave(tor);
-    }
-
-    torrentSetQueued(tor, false);
-}
 } // namespace
+
+void tr_torrent::stop_now()
+{
+    TR_ASSERT(session->am_in_session_thread());
+    auto const lock = unique_lock();
+
+    is_running_ = false;
+    is_stopping_ = false;
+
+    if (!session->isClosing())
+    {
+        tr_logAddInfoTor(this, _("Pausing torrent"));
+    }
+
+    session->verify_remove(this);
+
+    stopped_.emit(this);
+    session->announcer_->stopTorrent(this);
+
+    session->closeTorrentFiles(this);
+
+    if (!is_deleting_)
+    {
+        tr_torrentSave(this);
+    }
+
+    set_is_queued(false);
+}
 
 void tr_torrentStop(tr_torrent* tor)
 {
@@ -825,7 +816,7 @@ void tr_torrentStop(tr_torrent* tor)
 
     tor->start_when_stable = false;
     tor->set_dirty();
-    tor->session->runInSessionThread(torrentStop, tor);
+    tor->session->runInSessionThread([tor]() { tor->stop_now(); });
 }
 
 void tr_torrentRemove(tr_torrent* tor, bool delete_flag, tr_fileFunc delete_func, void* user_data)
@@ -852,7 +843,7 @@ void tr_torrentFreeInSessionThread(tr_torrent* tor)
         tr_logAddInfoTor(tor, _("Removing torrent"));
     }
 
-    torrentStop(tor);
+    tor->stop_now();
 
     if (tor->is_deleting_)
     {
@@ -910,17 +901,6 @@ bool isNewTorrentASeed(tr_torrent* tor)
     return tor->ensure_piece_is_checked(0);
 }
 
-void torrentInitFromInfoDict(tr_torrent* tor)
-{
-    tor->completion = tr_completion{ tor, &tor->block_info() };
-    tor->obfuscated_hash = tr_sha1::digest("req2"sv, tor->info_hash());
-    tor->fpm_.reset(tor->metainfo_);
-    tor->file_mtimes_.resize(tor->file_count());
-    tor->file_priorities_.reset(&tor->fpm_);
-    tor->files_wanted_.reset(&tor->fpm_);
-    tor->checked_pieces_ = tr_bitfield{ size_t(tor->piece_count()) };
-}
-
 void on_metainfo_completed(tr_torrent* tor)
 {
     // we can look for files now that we know what files are in the torrent
@@ -948,23 +928,35 @@ void on_metainfo_completed(tr_torrent* tor)
         }
     }
 }
+} // namespace torrent_init_helpers
+} // namespace
 
-void torrentInit(tr_torrent* tor, tr_ctor const* ctor)
+void tr_torrent::on_metainfo_updated()
 {
-    tr_session* session = tr_ctorGetSession(ctor);
+    completion = tr_completion{ this, &block_info() };
+    obfuscated_hash_ = tr_sha1::digest("req2"sv, info_hash());
+    fpm_.reset(metainfo_);
+    file_mtimes_.resize(file_count());
+    file_priorities_.reset(&fpm_);
+    files_wanted_.reset(&fpm_);
+    checked_pieces_ = tr_bitfield{ size_t(piece_count()) };
+}
+
+void tr_torrent::init(tr_ctor const* const ctor)
+{
+    using namespace torrent_init_helpers;
+
+    session = tr_ctorGetSession(ctor);
     TR_ASSERT(session != nullptr);
-    tor->session = session;
+    auto const lock = unique_lock();
 
-    auto const lock = tor->unique_lock();
+    queuePosition = std::size(session->torrents());
 
-    tor->queuePosition = std::size(session->torrents());
-
-    torrentInitFromInfoDict(tor);
-
+    on_metainfo_updated();
     char const* dir = nullptr;
     if (tr_ctorGetDownloadDir(ctor, TR_FORCE, &dir) || tr_ctorGetDownloadDir(ctor, TR_FALLBACK, &dir))
     {
-        tor->download_dir_ = dir;
+        download_dir_ = dir;
     }
 
     if (!tr_ctorGetIncompleteDir(ctor, &dir))
@@ -974,24 +966,23 @@ void torrentInit(tr_torrent* tor, tr_ctor const* ctor)
 
     if (tr_sessionIsIncompleteDirEnabled(session))
     {
-        tor->incomplete_dir_ = dir;
+        incomplete_dir_ = dir;
     }
-    tor->bandwidth_.set_parent(&session->top_bandwidth_);
-    tor->bandwidth_.set_priority(tr_ctorGetBandwidthPriority(ctor));
-    tor->error = TR_STAT_OK;
-    tor->finished_seeding_by_idle_ = false;
+    bandwidth_.set_parent(&session->top_bandwidth_);
+    bandwidth_.set_priority(tr_ctorGetBandwidthPriority(ctor));
+    error().clear();
+    finished_seeding_by_idle_ = false;
 
-    auto const& labels = tr_ctorGetLabels(ctor);
-    tor->setLabels(labels);
+    set_labels(tr_ctorGetLabels(ctor));
 
-    session->addTorrent(tor);
+    session->addTorrent(this);
 
-    TR_ASSERT(tor->downloadedCur == 0);
-    TR_ASSERT(tor->uploadedCur == 0);
+    TR_ASSERT(bytes_downloaded_.during_this_session() == 0U);
+    TR_ASSERT(bytes_uploaded_.during_this_session() == 0);
 
-    auto const now = tr_time();
-    tor->addedDate = now; // this is a default that will be overwritten by the resume file
-    tor->anyDate = now;
+    mark_changed();
+
+    addedDate = tr_time(); // this is a default that will be overwritten by the resume file
 
     tr_resume::fields_t loaded = {};
 
@@ -1000,38 +991,38 @@ void torrentInit(tr_torrent* tor, tr_ctor const* ctor)
         // that set things as dirty, but... these settings being loaded are
         // the same ones that would be saved back again, so don't let them
         // affect the 'is dirty' flag.
-        auto const was_dirty = tor->is_dirty_;
-        loaded = tr_resume::load(tor, tr_resume::All, ctor);
-        tor->is_dirty_ = was_dirty;
-        tr_torrent_metainfo::migrate_file(session->torrentDir(), tor->name(), tor->info_hash_string(), ".torrent"sv);
+        auto const was_dirty = is_dirty();
+        loaded = tr_resume::load(this, tr_resume::All, ctor);
+        set_dirty(was_dirty);
+        tr_torrent_metainfo::migrate_file(session->torrentDir(), name(), info_hash_string(), ".torrent"sv);
     }
 
-    tor->completeness = tor->completion.status();
+    completeness = completion.status();
 
-    tr_ctorInitTorrentPriorities(ctor, tor);
-    tr_ctorInitTorrentWanted(ctor, tor);
+    tr_ctorInitTorrentPriorities(ctor, this);
+    tr_ctorInitTorrentWanted(ctor, this);
 
-    tor->refresh_current_dir();
+    refresh_current_dir();
 
     if ((loaded & tr_resume::Speedlimit) == 0)
     {
-        tor->use_speed_limit(TR_UP, false);
-        tor->set_speed_limit_bps(TR_UP, tr_toSpeedBytes(tor->session->speedLimitKBps(TR_UP)));
-        tor->use_speed_limit(TR_DOWN, false);
-        tor->set_speed_limit_bps(TR_DOWN, tr_toSpeedBytes(tor->session->speedLimitKBps(TR_DOWN)));
-        tr_torrentUseSessionLimits(tor, true);
+        use_speed_limit(TR_UP, false);
+        set_speed_limit(TR_UP, session->speed_limit(TR_UP));
+        use_speed_limit(TR_DOWN, false);
+        set_speed_limit(TR_DOWN, session->speed_limit(TR_DOWN));
+        tr_torrentUseSessionLimits(this, true);
     }
 
     if ((loaded & tr_resume::Ratiolimit) == 0)
     {
-        tor->set_seed_ratio_mode(TR_RATIOLIMIT_GLOBAL);
-        tor->set_seed_ratio(tor->session->desiredRatio());
+        set_seed_ratio_mode(TR_RATIOLIMIT_GLOBAL);
+        set_seed_ratio(session->desiredRatio());
     }
 
     if ((loaded & tr_resume::Idlelimit) == 0)
     {
-        tor->set_idle_limit_mode(TR_IDLELIMIT_GLOBAL);
-        tor->set_idle_limit_minutes(tor->session->idleLimitMinutes());
+        set_idle_limit_mode(TR_IDLELIMIT_GLOBAL);
+        set_idle_limit_minutes(session->idleLimitMinutes());
     }
 
     auto has_local_data = std::optional<bool>{};
@@ -1039,13 +1030,10 @@ void torrentInit(tr_torrent* tor, tr_ctor const* ctor)
     {
         // if tr_resume::load() loaded progress info, then initCheckedPieces()
         // has already looked for local data on the filesystem
-        has_local_data = std::any_of(
-            std::begin(tor->file_mtimes_),
-            std::end(tor->file_mtimes_),
-            [](auto mtime) { return mtime > 0; });
+        has_local_data = std::any_of(std::begin(file_mtimes_), std::end(file_mtimes_), [](auto mtime) { return mtime > 0; });
     }
 
-    auto const filename = tor->has_metainfo() ? tor->torrent_file() : tor->magnet_file();
+    auto const filename = has_metainfo() ? torrent_file() : magnet_file();
 
     // if we don't have a local .torrent or .magnet file already,
     // assume the torrent is new
@@ -1053,49 +1041,46 @@ void torrentInit(tr_torrent* tor, tr_ctor const* ctor)
 
     if (is_new_torrent)
     {
-        tr_error* error = nullptr;
+        auto error = tr_error{};
 
-        if (tor->has_metainfo()) // torrent file
+        if (has_metainfo()) // torrent file
         {
             tr_ctorSaveContents(ctor, filename, &error);
         }
         else // magnet link
         {
-            auto const magnet_link = tor->magnet();
+            auto const magnet_link = magnet();
             tr_file_save(filename, magnet_link, &error);
         }
 
-        if (error != nullptr)
+        if (error)
         {
-            tor->set_local_error(fmt::format(
+            this->error().set_local_error(fmt::format(
                 _("Couldn't save '{path}': {error} ({error_code})"),
                 fmt::arg("path", filename),
-                fmt::arg("error", error->message),
-                fmt::arg("error_code", error->code)));
-            tr_error_clear(&error);
+                fmt::arg("error", error.message()),
+                fmt::arg("error_code", error.code())));
         }
     }
 
-    tor->torrent_announcer = session->announcer_->addTorrent(tor, &tr_torrent::on_tracker_response);
+    torrent_announcer = session->announcer_->addTorrent(this, &tr_torrent::on_tracker_response);
 
-    if (auto const has_metainfo = tor->has_metainfo(); is_new_torrent && has_metainfo)
+    if (auto const has_metainfo = this->has_metainfo(); is_new_torrent && has_metainfo)
     {
-        on_metainfo_completed(tor);
+        on_metainfo_completed(this);
     }
-    else if (tor->start_when_stable)
+    else if (start_when_stable)
     {
         auto opts = torrent_start_opts{};
         opts.bypass_queue = !has_metainfo; // to fetch metainfo from peers
         opts.has_local_data = has_local_data;
-        torrentStart(tor, opts);
+        torrentStart(this, opts);
     }
     else
     {
-        setLocalErrorIfFilesDisappeared(tor, has_local_data);
+        setLocalErrorIfFilesDisappeared(this, has_local_data);
     }
 }
-} // namespace torrent_init_helpers
-} // namespace
 
 void tr_torrent::set_metainfo(tr_torrent_metainfo tm)
 {
@@ -1103,8 +1088,8 @@ void tr_torrent::set_metainfo(tr_torrent_metainfo tm)
 
     TR_ASSERT(!has_metainfo());
     metainfo_ = std::move(tm);
+    on_metainfo_updated();
 
-    torrentInitFromInfoDict(this);
     got_metainfo_.emit(this);
     session->onMetadataCompleted(this);
     this->set_dirty();
@@ -1141,7 +1126,8 @@ tr_torrent* tr_torrentNew(tr_ctor* ctor, tr_torrent** setme_duplicate_of)
     }
 
     auto* const tor = new tr_torrent{ std::move(metainfo) };
-    torrentInit(tor, ctor);
+    tor->verify_done_callback_ = tr_ctorStealVerifyDoneCallback(ctor);
+    tor->init(ctor);
     return tor;
 }
 
@@ -1151,12 +1137,7 @@ namespace
 {
 namespace location_helpers
 {
-void setLocationInSessionThread(
-    tr_torrent* tor,
-    std::string const& path,
-    bool move_from_old_path,
-    double volatile* setme_progress,
-    int volatile* setme_state)
+void setLocationInSessionThread(tr_torrent* tor, std::string const& path, bool move_from_old_path, int volatile* setme_state)
 {
     TR_ASSERT(tr_isTorrent(tor));
     TR_ASSERT(tor->session->am_in_session_thread());
@@ -1171,20 +1152,19 @@ void setLocationInSessionThread(
 
         // ensure the files are all closed and idle before moving
         tor->session->closeTorrentFiles(tor);
-        tor->session->verifyRemove(tor);
+        tor->session->verify_remove(tor);
 
-        tr_error* error = nullptr;
-        ok = tor->metainfo_.files().move(tor->current_dir(), path, setme_progress, tor->name(), &error);
-        if (error != nullptr)
+        auto error = tr_error{};
+        ok = tor->metainfo_.files().move(tor->current_dir(), path, tor->name(), &error);
+        if (error)
         {
-            tor->set_local_error(fmt::format(
+            tor->error().set_local_error(fmt::format(
                 _("Couldn't move '{old_path}' to '{path}': {error} ({error_code})"),
                 fmt::arg("old_path", tor->current_dir()),
                 fmt::arg("path", path),
-                fmt::arg("error", error->message),
-                fmt::arg("error_code", error->code)));
+                fmt::arg("error", error.message()),
+                fmt::arg("error_code", error.code())));
             tr_torrentStop(tor);
-            tr_error_clear(&error);
         }
     }
 
@@ -1224,11 +1204,7 @@ size_t buildSearchPathArray(tr_torrent const* tor, std::string_view* paths)
 } // namespace location_helpers
 } // namespace
 
-void tr_torrent::set_location(
-    std::string_view location,
-    bool move_from_old_path,
-    double volatile* setme_progress,
-    int volatile* setme_state)
+void tr_torrent::set_location(std::string_view location, bool move_from_old_path, int volatile* setme_state)
 {
     using namespace location_helpers;
 
@@ -1237,26 +1213,16 @@ void tr_torrent::set_location(
         *setme_state = TR_LOC_MOVING;
     }
 
-    this->session->runInSessionThread(
-        setLocationInSessionThread,
-        this,
-        std::string{ location },
-        move_from_old_path,
-        setme_progress,
-        setme_state);
+    this->session
+        ->runInSessionThread(setLocationInSessionThread, this, std::string{ location }, move_from_old_path, setme_state);
 }
 
-void tr_torrentSetLocation(
-    tr_torrent* tor,
-    char const* location,
-    bool move_from_old_path,
-    double volatile* setme_progress,
-    int volatile* setme_state)
+void tr_torrentSetLocation(tr_torrent* tor, char const* location, bool move_from_old_path, int volatile* setme_state)
 {
     TR_ASSERT(tr_isTorrent(tor));
     TR_ASSERT(!tr_str_is_empty(location));
 
-    tor->set_location(location, move_from_old_path, setme_progress, setme_state);
+    tor->set_location(location, move_from_old_path, setme_state);
 }
 
 std::optional<tr_torrent_files::FoundFile> tr_torrent::find_file(tr_file_index_t file_index) const
@@ -1345,139 +1311,137 @@ bool tr_torrentCanManualUpdate(tr_torrent const* tor)
 
 // ---
 
-namespace
+tr_stat tr_torrent::stats() const
 {
-namespace stat_helpers
-{
-[[nodiscard]] constexpr bool tr_torrentIsStalled(tr_torrent const* tor, std::optional<size_t> idle_secs)
-{
-    return tor->session->queueStalledEnabled() && idle_secs > tor->session->queueStalledMinutes() * 60U;
-}
-} // namespace stat_helpers
-} // namespace
-
-tr_stat const* tr_torrentStat(tr_torrent* const tor)
-{
-    using namespace stat_helpers;
-
-    TR_ASSERT(tr_isTorrent(tor));
+    static auto constexpr IsStalled = [](tr_torrent const* const tor, std::optional<size_t> idle_secs)
+    {
+        return tor->session->queueStalledEnabled() && idle_secs > tor->session->queueStalledMinutes() * 60U;
+    };
 
     auto const now_msec = tr_time_msec();
     auto const now_sec = tr_time();
 
-    auto const swarm_stats = tor->swarm != nullptr ? tr_swarmGetStats(tor->swarm) : tr_swarm_stats{};
-    auto const activity = tor->activity();
-    auto const idle_seconds = tor->idle_seconds(now_sec);
+    auto const swarm_stats = this->swarm != nullptr ? tr_swarmGetStats(this->swarm) : tr_swarm_stats{};
+    auto const activity = this->activity();
+    auto const idle_seconds = this->idle_seconds(now_sec);
 
-    tr_stat* const s = &tor->stats;
-    s->id = tor->id();
-    s->activity = activity;
-    s->error = tor->error;
-    s->queuePosition = tor->queuePosition;
-    s->idleSecs = idle_seconds ? static_cast<time_t>(*idle_seconds) : -1;
-    s->isStalled = tr_torrentIsStalled(tor, idle_seconds);
-    s->errorString = tor->error_string.c_str();
+    auto stats = tr_stat{};
 
-    s->peersConnected = swarm_stats.peer_count;
-    s->peersSendingToUs = swarm_stats.active_peer_count[TR_DOWN];
-    s->peersGettingFromUs = swarm_stats.active_peer_count[TR_UP];
-    s->webseedsSendingToUs = swarm_stats.active_webseed_count;
+    stats.id = this->id();
+    stats.activity = activity;
+    stats.error = this->error().error_type();
+    stats.queuePosition = this->queuePosition;
+    stats.idleSecs = idle_seconds ? static_cast<time_t>(*idle_seconds) : -1;
+    stats.isStalled = IsStalled(this, idle_seconds);
+    stats.errorString = this->error().errmsg().c_str();
+
+    stats.peersConnected = swarm_stats.peer_count;
+    stats.peersSendingToUs = swarm_stats.active_peer_count[TR_DOWN];
+    stats.peersGettingFromUs = swarm_stats.active_peer_count[TR_UP];
+    stats.webseedsSendingToUs = swarm_stats.active_webseed_count;
 
     for (int i = 0; i < TR_PEER_FROM__MAX; i++)
     {
-        s->peersFrom[i] = swarm_stats.peer_from_count[i];
+        stats.peersFrom[i] = swarm_stats.peer_from_count[i];
+        stats.knownPeersFrom[i] = swarm_stats.known_peer_from_count[i];
     }
 
-    auto const piece_upload_speed_byps = tor->bandwidth_.get_piece_speed_bytes_per_second(now_msec, TR_UP);
-    s->pieceUploadSpeed_KBps = tr_toSpeedKBps(piece_upload_speed_byps);
-    auto const piece_download_speed_byps = tor->bandwidth_.get_piece_speed_bytes_per_second(now_msec, TR_DOWN);
-    s->pieceDownloadSpeed_KBps = tr_toSpeedKBps(piece_download_speed_byps);
+    auto const piece_upload_speed = this->bandwidth_.get_piece_speed(now_msec, TR_UP);
+    stats.pieceUploadSpeed_KBps = piece_upload_speed.count(Speed::Units::KByps);
+    auto const piece_download_speed = this->bandwidth_.get_piece_speed(now_msec, TR_DOWN);
+    stats.pieceDownloadSpeed_KBps = piece_download_speed.count(Speed::Units::KByps);
 
-    s->percentComplete = tor->completion.percent_complete();
-    s->metadataPercentComplete = tr_torrentGetMetadataPercent(tor);
+    stats.percentComplete = this->completion.percent_complete();
+    stats.metadataPercentComplete = tr_torrentGetMetadataPercent(this);
 
-    s->percentDone = tor->completion.percent_done();
-    s->leftUntilDone = tor->completion.left_until_done();
-    s->sizeWhenDone = tor->completion.size_when_done();
+    stats.percentDone = this->completion.percent_done();
+    stats.leftUntilDone = this->completion.left_until_done();
+    stats.sizeWhenDone = this->completion.size_when_done();
 
-    auto const verify_progress = tor->verify_progress();
-    s->recheckProgress = verify_progress.value_or(0.0);
-    s->activityDate = tor->activityDate;
-    s->addedDate = tor->addedDate;
-    s->doneDate = tor->doneDate;
-    s->editDate = tor->editDate;
-    s->startDate = tor->startDate;
-    s->secondsSeeding = tor->seconds_seeding(now_sec);
-    s->secondsDownloading = tor->seconds_downloading(now_sec);
+    auto const verify_progress = this->verify_progress();
+    stats.recheckProgress = verify_progress.value_or(0.0);
+    stats.activityDate = this->activityDate;
+    stats.addedDate = this->addedDate;
+    stats.doneDate = this->doneDate;
+    stats.editDate = this->editDate;
+    stats.startDate = this->startDate;
+    stats.secondsSeeding = this->seconds_seeding(now_sec);
+    stats.secondsDownloading = this->seconds_downloading(now_sec);
 
-    s->corruptEver = tor->corruptCur + tor->corruptPrev;
-    s->downloadedEver = tor->downloadedCur + tor->downloadedPrev;
-    s->uploadedEver = tor->uploadedCur + tor->uploadedPrev;
-    s->haveValid = tor->completion.has_valid();
-    s->haveUnchecked = tor->has_total() - s->haveValid;
-    s->desiredAvailable = tr_peerMgrGetDesiredAvailable(tor);
+    stats.corruptEver = this->bytes_corrupt_.ever();
+    stats.downloadedEver = this->bytes_downloaded_.ever();
+    stats.uploadedEver = this->bytes_uploaded_.ever();
+    stats.haveValid = this->completion.has_valid();
+    stats.haveUnchecked = this->has_total() - stats.haveValid;
+    stats.desiredAvailable = tr_peerMgrGetDesiredAvailable(this);
 
-    s->ratio = tr_getRatio(s->uploadedEver, tor->size_when_done());
+    stats.ratio = tr_getRatio(stats.uploadedEver, this->size_when_done());
 
     auto seed_ratio_bytes_left = uint64_t{};
     auto seed_ratio_bytes_goal = uint64_t{};
-    bool const seed_ratio_applies = tr_torrentGetSeedRatioBytes(tor, &seed_ratio_bytes_left, &seed_ratio_bytes_goal);
+    bool const seed_ratio_applies = tr_torrentGetSeedRatioBytes(this, &seed_ratio_bytes_left, &seed_ratio_bytes_goal);
 
     // eta, etaIdle
-    s->eta = TR_ETA_NOT_AVAIL;
-    s->etaIdle = TR_ETA_NOT_AVAIL;
+    stats.eta = TR_ETA_NOT_AVAIL;
+    stats.etaIdle = TR_ETA_NOT_AVAIL;
     if (activity == TR_STATUS_DOWNLOAD)
     {
-        if (auto const eta_speed_byps = tor->eta_speed_.update(now_msec, piece_download_speed_byps); eta_speed_byps == 0U)
+        if (auto const eta_speed_byps = eta_speed_.update(now_msec, piece_download_speed).base_quantity(); eta_speed_byps == 0U)
         {
-            s->eta = TR_ETA_UNKNOWN;
+            stats.eta = TR_ETA_UNKNOWN;
         }
-        else if (s->leftUntilDone <= s->desiredAvailable || tor->webseed_count() >= 1U)
+        else if (stats.leftUntilDone <= stats.desiredAvailable || webseed_count() >= 1U)
         {
-            s->eta = s->leftUntilDone / eta_speed_byps;
+            stats.eta = stats.leftUntilDone / eta_speed_byps;
         }
     }
     else if (activity == TR_STATUS_SEED)
     {
-        auto const eta_speed_byps = tor->eta_speed_.update(now_msec, piece_upload_speed_byps);
+        auto const eta_speed_byps = eta_speed_.update(now_msec, piece_upload_speed).base_quantity();
 
         if (seed_ratio_applies)
         {
-            s->eta = eta_speed_byps == 0U ? TR_ETA_UNKNOWN : seed_ratio_bytes_left / eta_speed_byps;
+            stats.eta = eta_speed_byps == 0U ? TR_ETA_UNKNOWN : seed_ratio_bytes_left / eta_speed_byps;
         }
 
         if (eta_speed_byps < 1U)
         {
-            if (auto const secs_left = tor->idle_seconds_left(now_sec); secs_left)
+            if (auto const secs_left = idle_seconds_left(now_sec); secs_left)
             {
-                s->etaIdle = *secs_left;
+                stats.etaIdle = *secs_left;
             }
         }
     }
 
-    /* s->haveValid is here to make sure a torrent isn't marked 'finished'
+    /* stats.haveValid is here to make sure a torrent isn't marked 'finished'
      * when the user hits "uncheck all" prior to starting the torrent... */
-    s->finished = tor->finished_seeding_by_idle_ || (seed_ratio_applies && seed_ratio_bytes_left == 0 && s->haveValid != 0);
+    stats.finished = this->finished_seeding_by_idle_ ||
+        (seed_ratio_applies && seed_ratio_bytes_left == 0 && stats.haveValid != 0);
 
-    if (!seed_ratio_applies || s->finished)
+    if (!seed_ratio_applies || stats.finished)
     {
-        s->seedRatioPercentDone = 1.0F;
+        stats.seedRatioPercentDone = 1.0F;
     }
     else if (seed_ratio_bytes_goal == 0) /* impossible? safeguard for div by zero */
     {
-        s->seedRatioPercentDone = 0.0F;
+        stats.seedRatioPercentDone = 0.0F;
     }
     else
     {
-        s->seedRatioPercentDone = float(seed_ratio_bytes_goal - seed_ratio_bytes_left) / seed_ratio_bytes_goal;
+        stats.seedRatioPercentDone = float(seed_ratio_bytes_goal - seed_ratio_bytes_left) / seed_ratio_bytes_goal;
     }
 
     /* test some of the constraints */
-    TR_ASSERT(s->sizeWhenDone <= tor->total_size());
-    TR_ASSERT(s->leftUntilDone <= s->sizeWhenDone);
-    TR_ASSERT(s->desiredAvailable <= s->leftUntilDone);
+    TR_ASSERT(stats.sizeWhenDone <= this->total_size());
+    TR_ASSERT(stats.leftUntilDone <= stats.sizeWhenDone);
+    TR_ASSERT(stats.desiredAvailable <= stats.leftUntilDone);
+    return stats;
+}
 
-    return s;
+tr_stat const* tr_torrentStat(tr_torrent* const tor)
+{
+    tor->stats_ = tor->stats();
+    return &tor->stats_;
 }
 
 // ---
@@ -1535,7 +1499,7 @@ tr_torrent_view tr_torrentView(tr_torrent const* tor)
     TR_ASSERT(tr_isTorrent(tor));
 
     auto ret = tr_torrent_view{};
-    ret.name = tr_torrentName(tor);
+    ret.name = tor->name().c_str();
     ret.hash_string = tor->info_hash_string().c_str();
     ret.comment = tor->comment().c_str();
     ret.creator = tor->creator().c_str();
@@ -1624,86 +1588,133 @@ void tr_torrentStartMagnet(tr_torrent* tor)
 
 // ---
 
-namespace
-{
-namespace verify_helpers
-{
-void onVerifyDoneThreadFunc(tr_torrent* const tor)
-{
-    TR_ASSERT(tor->session->am_in_session_thread());
-
-    if (tor->is_deleting_)
-    {
-        return;
-    }
-
-    tor->recheck_completeness();
-
-    if (tor->start_when_stable)
-    {
-        auto opts = torrent_start_opts{};
-        opts.has_local_data = !tor->checked_pieces_.has_none();
-        torrentStart(tor, opts);
-    }
-}
-
-void verifyTorrent(tr_torrent* const tor, bool force)
-{
-    TR_ASSERT(tor->session->am_in_session_thread());
-    auto const lock = tor->unique_lock();
-
-    if (tor->is_deleting_)
-    {
-        return;
-    }
-
-    /* if the torrent's already being verified, stop it */
-    tor->session->verifyRemove(tor);
-
-    if (!tor->has_metainfo())
-    {
-        return;
-    }
-
-    if (tor->is_running())
-    {
-        torrentStop(tor);
-    }
-
-    if (force || !setLocalErrorIfFilesDisappeared(tor))
-    {
-        tor->session->verifyAdd(tor);
-    }
-}
-} // namespace verify_helpers
-} // namespace
-
-void tr_torrentOnVerifyDone(tr_torrent* tor, bool aborted)
-{
-    using namespace verify_helpers;
-
-    if (aborted || tor->is_deleting_)
-    {
-        return;
-    }
-
-    tor->session->runInSessionThread(onVerifyDoneThreadFunc, tor);
-}
-
 void tr_torrentVerify(tr_torrent* tor, bool force)
 {
-    using namespace verify_helpers;
+    tor->session->runInSessionThread(
+        [tor, force]()
+        {
+            TR_ASSERT(tor->session->am_in_session_thread());
+            auto const lock = tor->unique_lock();
 
-    tor->session->runInSessionThread(verifyTorrent, tor, force);
+            if (tor->is_deleting_)
+            {
+                return;
+            }
+
+            tor->session->verify_remove(tor);
+
+            if (!tor->has_metainfo())
+            {
+                return;
+            }
+
+            if (tor->is_running())
+            {
+                tor->stop_now();
+            }
+
+            if (force || !setLocalErrorIfFilesDisappeared(tor))
+            {
+                tor->session->verify_add(tor);
+            }
+        });
 }
 
-void tr_torrent::set_verify_state(tr_verify_state state)
+void tr_torrent::set_verify_state(VerifyState const state)
 {
-    TR_ASSERT(state == TR_VERIFY_NONE || state == TR_VERIFY_WAIT || state == TR_VERIFY_NOW);
+    TR_ASSERT(state == VerifyState::None || state == VerifyState::Queued || state == VerifyState::Active);
 
-    this->verify_state_ = state;
-    this->verify_progress_ = {};
-    this->mark_changed();
+    verify_state_ = state;
+    verify_progress_ = {};
+    mark_changed();
+}
+
+tr_torrent_metainfo const& tr_torrent::VerifyMediator::metainfo() const
+{
+    return tor_->metainfo_;
+}
+
+std::optional<std::string> tr_torrent::VerifyMediator::find_file(tr_file_index_t const file_index) const
+{
+    if (auto const found = tor_->find_file(file_index); found)
+    {
+        return std::string{ found->filename().sv() };
+    }
+
+    return {};
+}
+
+void tr_torrent::VerifyMediator::on_verify_queued()
+{
+    tr_logAddTraceTor(tor_, "Queued for verification");
+    tor_->set_verify_state(VerifyState::Queued);
+}
+
+void tr_torrent::VerifyMediator::on_verify_started()
+{
+    tr_logAddDebugTor(tor_, "Verifying torrent");
+    time_started_ = tr_time();
+    tor_->set_verify_state(VerifyState::Active);
+}
+
+void tr_torrent::VerifyMediator::on_piece_checked(tr_piece_index_t const piece, bool const has_piece)
+{
+    auto const had_piece = tor_->has_piece(piece);
+
+    if (has_piece || had_piece)
+    {
+        tor_->set_has_piece(piece, has_piece);
+        tor_->set_dirty();
+    }
+
+    tor_->checked_pieces_.set(piece, true);
+    tor_->mark_changed();
+    tor_->verify_progress_ = std::clamp(static_cast<float>(piece + 1U) / tor_->metainfo_.piece_count(), 0.0F, 1.0F);
+}
+
+// (usually called from tr_verify_worker's thread)
+void tr_torrent::VerifyMediator::on_verify_done(bool const aborted)
+{
+    if (time_started_.has_value())
+    {
+        auto const total_size = tor_->total_size();
+        auto const duration_secs = tr_time() - *time_started_;
+        tr_logAddDebugTor(
+            tor_,
+            fmt::format(
+                "Verification is done. It took {} seconds to verify {} bytes ({} bytes per second)",
+                duration_secs,
+                total_size,
+                total_size / (1 + duration_secs)));
+    }
+
+    tor_->set_verify_state(VerifyState::None);
+
+    if (!aborted && !tor_->is_deleting_)
+    {
+        tor_->session->runInSessionThread(
+            [tor = tor_]()
+            {
+                if (tor->is_deleting_)
+                {
+                    return;
+                }
+
+                tor->recheck_completeness();
+
+                if (tor->verify_done_callback_)
+                {
+                    tor->verify_done_callback_(tor);
+                }
+
+                if (tor->start_when_stable)
+                {
+                    auto opts = torrent_start_opts{};
+                    opts.has_local_data = !tor->checked_pieces_.has_none();
+                    torrentStart(tor, opts);
+                }
+            });
+    }
 }
 
 // ---
@@ -1712,9 +1723,9 @@ void tr_torrentSave(tr_torrent* tor)
 {
     TR_ASSERT(tr_isTorrent(tor));
 
-    if (tor->is_dirty_)
+    if (tor->is_dirty())
     {
-        tor->is_dirty_ = false;
+        tor->set_dirty(false);
         tr_resume::save(tor);
     }
 }
@@ -1759,7 +1770,7 @@ void tr_torrent::recheck_completeness()
 
     if (new_completeness != completeness)
     {
-        bool const recent_change = downloadedCur != 0;
+        bool const recent_change = bytes_downloaded_.during_this_session() != 0U;
         bool const was_running = is_running();
 
         if (recent_change)
@@ -1786,7 +1797,7 @@ void tr_torrent::recheck_completeness()
 
             if (this->current_dir() == this->incomplete_dir())
             {
-                this->set_location(this->download_dir(), true, nullptr, nullptr);
+                this->set_location(this->download_dir(), true, nullptr);
             }
 
             done_.emit(this, recent_change);
@@ -1815,19 +1826,19 @@ void tr_torrentSetFileDLs(tr_torrent* tor, tr_file_index_t const* files, tr_file
 
 // ---
 
-void tr_torrent::setLabels(std::vector<tr_quark> const& new_labels)
+void tr_torrent::set_labels(labels_t const& new_labels)
 {
     auto const lock = unique_lock();
-    this->labels.clear();
+    labels_.clear();
 
     for (auto label : new_labels)
     {
-        if (std::find(std::begin(this->labels), std::end(this->labels), label) == std::end(this->labels))
+        if (std::find(std::begin(labels_), std::end(labels_), label) == std::end(labels_))
         {
-            this->labels.push_back(label);
+            labels_.push_back(label);
         }
     }
-    this->labels.shrink_to_fit();
+    labels_.shrink_to_fit();
     this->set_dirty();
 }
 
@@ -1985,31 +1996,28 @@ bool tr_torrent::set_tracker_list(std::string_view text)
     {
         auto const magnet_file = this->magnet_file();
         auto const magnet_link = this->magnet();
-        tr_error* save_error = nullptr;
+        auto save_error = tr_error{};
         if (!tr_file_save(magnet_file, magnet_link, &save_error))
         {
-            this->set_local_error(fmt::format(
+            this->error().set_local_error(fmt::format(
                 _("Couldn't save '{path}': {error} ({error_code})"),
                 fmt::arg("path", magnet_file),
-                fmt::arg("error", save_error->message),
-                fmt::arg("error_code", save_error->code)));
-            tr_error_clear(&save_error);
+                fmt::arg("error", save_error.message()),
+                fmt::arg("error_code", save_error.code())));
         }
     }
 
     /* if we had a tracker-related error on this torrent,
      * and that tracker's been removed,
      * then clear the error */
-    if (this->error == TR_STAT_TRACKER_WARNING || this->error == TR_STAT_TRACKER_ERROR)
+    if (auto const& error_url = error_.announce_url(); !std::empty(error_url))
     {
-        auto const error_url = this->error_announce_url;
-
         if (std::any_of(
                 std::begin(this->announce_list()),
                 std::end(this->announce_list()),
                 [error_url](auto const& tracker) { return tracker.announce == error_url; }))
         {
-            tr_torrentClearError(this);
+            error_.clear();
         }
     }
 
@@ -2042,23 +2050,15 @@ void tr_torrent::on_tracker_response(tr_tracker_event const* event)
                 _("Tracker warning: '{warning}' ({url})"),
                 fmt::arg("warning", event->text),
                 fmt::arg("url", tr_urlTrackerLogName(event->announce_url))));
-        error = TR_STAT_TRACKER_WARNING;
-        error_announce_url = event->announce_url;
-        error_string = event->text;
+        error_.set_tracker_warning(event->announce_url, event->text);
         break;
 
     case tr_tracker_event::Type::Error:
-        error = TR_STAT_TRACKER_ERROR;
-        error_announce_url = event->announce_url;
-        error_string = event->text;
+        error_.set_tracker_error(event->announce_url, event->text);
         break;
 
     case tr_tracker_event::Type::ErrorClear:
-        if (error != TR_STAT_LOCAL_ERROR)
-        {
-            tr_torrentClearError(this);
-        }
-
+        error_.clear_if_tracker();
         break;
     }
 }
@@ -2160,7 +2160,7 @@ void onFileCompleted(tr_torrent* tor, tr_file_index_t i)
         {
             auto const& oldpath = found->filename();
             auto const newpath = tr_pathbuf{ found->base(), '/', file_subpath };
-            tr_error* error = nullptr;
+            auto error = tr_error{};
 
             if (!tr_sys_path_rename(oldpath, newpath, &error))
             {
@@ -2170,9 +2170,8 @@ void onFileCompleted(tr_torrent* tor, tr_file_index_t i)
                         _("Couldn't move '{old_path}' to '{path}': {error} ({error_code})"),
                         fmt::arg("old_path", oldpath),
                         fmt::arg("path", newpath),
-                        fmt::arg("error", error->message),
-                        fmt::arg("error_code", error->code)));
-                tr_error_free(error);
+                        fmt::arg("error", error.message()),
+                        fmt::arg("error_code", error.code())));
             }
         }
     }
@@ -2201,8 +2200,8 @@ void onPieceFailed(tr_torrent* tor, tr_piece_index_t piece)
     tr_logAddDebugTor(tor, fmt::format("Piece {}, which was just downloaded, failed its checksum test", piece));
 
     auto const n = tor->piece_size(piece);
-    tor->corruptCur += n;
-    tor->downloadedCur -= std::min(tor->downloadedCur, uint64_t{ n });
+    tor->bytes_corrupt_ += n;
+    tor->bytes_downloaded_.reduce(n);
     tor->got_bad_piece_.emit(tor, piece);
     tor->set_has_piece(piece, false);
 }
@@ -2219,8 +2218,7 @@ void tr_torrentGotBlock(tr_torrent* tor, tr_block_index_t block)
     if (tor->has_block(block))
     {
         tr_logAddDebugTor(tor, "we have this block already...");
-        auto const n = tor->block_size(block);
-        tor->downloadedCur -= std::min(tor->downloadedCur, uint64_t{ n });
+        tor->bytes_downloaded_.reduce(tor->block_size(block));
         return;
     }
 
@@ -2282,9 +2280,9 @@ void tr_torrent::set_download_dir(std::string_view path, bool is_new_torrent)
             recheck_completeness();
         }
     }
-    else if (error == TR_STAT_LOCAL_ERROR && !setLocalErrorIfFilesDisappeared(this))
+    else if (error_.error_type() == TR_STAT_LOCAL_ERROR && !setLocalErrorIfFilesDisappeared(this))
     {
-        tr_torrentClearError(this);
+        error_.clear();
     }
 }
 
@@ -2395,14 +2393,11 @@ int renamePath(tr_torrent const* tor, std::string_view oldpath, std::string_view
 
         if (!tgt_exists)
         {
-            tr_error* error = nullptr;
-
             tmp = errno;
 
-            if (!tr_sys_path_rename(src, tgt, &error))
+            if (auto error = tr_error{}; !tr_sys_path_rename(src, tgt, &error))
             {
-                err = error->code;
-                tr_error_free(error);
+                err = error.code();
             }
 
             errno = tmp;
@@ -2563,7 +2558,7 @@ void tr_torrent::mark_edited()
 
 void tr_torrent::mark_changed()
 {
-    this->anyDate = tr_time();
+    this->bump_date_changed(tr_time());
 }
 
 void tr_torrent::set_blocks(tr_bitfield blocks)

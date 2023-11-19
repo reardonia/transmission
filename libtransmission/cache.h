@@ -1,4 +1,4 @@
-// This file Copyright © 2010-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -12,14 +12,16 @@
 #include <cstddef> // for size_t
 #include <cstdint> // for intX_t, uintX_t
 #include <memory> // for std::unique_ptr
+#include <mutex>
 #include <utility> // for std::pair
 #include <vector>
 
 #include <small/vector.hpp>
 
-#include "transmission.h"
+#include "libtransmission/transmission.h"
 
-#include "block-info.h"
+#include "libtransmission/block-info.h"
+#include "libtransmission/values.h"
 
 class tr_torrents;
 struct tr_torrent;
@@ -28,16 +30,17 @@ class Cache
 {
 public:
     using BlockData = small::max_size_vector<uint8_t, tr_block_info::BlockSize>;
+    using Memory = libtransmission::Values::Memory;
 
-    Cache(tr_torrents& torrents, size_t max_bytes);
+    Cache(tr_torrents const& torrents, Memory max_size);
 
-    int set_limit(size_t new_limit);
+    int set_limit(Memory max_size);
 
     // @return any error code from cacheTrim()
     int write_block(tr_torrent_id_t tor, tr_block_index_t block, std::unique_ptr<BlockData> writeme);
 
-    int read_block(tr_torrent* torrent, tr_block_info::Location const& loc, uint32_t len, uint8_t* setme);
-    int prefetch_block(tr_torrent* torrent, tr_block_info::Location const& loc, uint32_t len);
+    int read_block(tr_torrent* torrent, tr_block_info::Location const& loc, size_t len, uint8_t* setme);
+    int prefetch_block(tr_torrent* torrent, tr_block_info::Location const& loc, size_t len);
     int flush_torrent(tr_torrent const* torrent);
     int flush_file(tr_torrent const* torrent, tr_file_index_t file);
 
@@ -71,11 +74,14 @@ private:
     // @return any error code from writeContiguous()
     [[nodiscard]] int cache_trim();
 
-    [[nodiscard]] static size_t get_max_blocks(size_t max_bytes) noexcept;
+    [[nodiscard]] static constexpr size_t get_max_blocks(Memory const max_size) noexcept
+    {
+        return max_size.base_quantity() / tr_block_info::BlockSize;
+    }
 
     [[nodiscard]] CIter get_block(tr_torrent const* torrent, tr_block_info::Location const& loc) noexcept;
 
-    tr_torrents& torrents_;
+    tr_torrents const& torrents_;
 
     Blocks blocks_ = {};
     size_t max_blocks_ = 0;
@@ -84,6 +90,8 @@ private:
     mutable size_t disk_write_bytes_ = 0;
     mutable size_t cache_writes_ = 0;
     mutable size_t cache_write_bytes_ = 0;
+
+    mutable std::mutex mutex_;
 
     static constexpr struct
     {

@@ -1,4 +1,4 @@
-// This file Copyright © 2008-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -346,41 +346,6 @@ bool tr_variantDictFindRaw(tr_variant* const var, tr_quark key, std::byte const*
 
 // ---
 
-void tr_variantInitReal(tr_variant* initme, double value)
-{
-    *initme = value;
-}
-
-void tr_variantInitBool(tr_variant* initme, bool value)
-{
-    *initme = value;
-}
-
-void tr_variantInitInt(tr_variant* initme, int64_t value)
-{
-    *initme = value;
-}
-
-void tr_variantInitStrView(tr_variant* initme, std::string_view val)
-{
-    *initme = tr_variant::unmanaged_string(val);
-}
-
-void tr_variantInitRaw(tr_variant* initme, void const* value, size_t value_len)
-{
-    tr_variantInitStr(initme, std::string_view{ static_cast<char const*>(value), value_len });
-}
-
-void tr_variantInitQuark(tr_variant* initme, tr_quark value)
-{
-    tr_variantInitStrView(initme, tr_quark_get_string_view(value));
-}
-
-void tr_variantInitStr(tr_variant* initme, std::string_view value)
-{
-    *initme = value;
-}
-
 void tr_variantInitList(tr_variant* initme, size_t n_reserve)
 {
     auto vec = tr_variant::Vector{};
@@ -463,11 +428,6 @@ tr_variant* tr_variantListAddStrView(tr_variant* const var, std::string_view val
     return child;
 }
 
-tr_variant* tr_variantListAddQuark(tr_variant* const var, tr_quark value)
-{
-    return tr_variantListAddStrView(var, tr_quark_get_string_view(value));
-}
-
 tr_variant* tr_variantListAddRaw(tr_variant* const var, void const* value, size_t n_bytes)
 {
     auto* const child = tr_variantListAdd(var);
@@ -508,7 +468,7 @@ tr_variant* tr_variantDictAddInt(tr_variant* const var, tr_quark key, int64_t va
 {
     tr_variantDictRemove(var, key);
     auto* const child = tr_variantDictAdd(var, key);
-    tr_variantInitInt(child, val);
+    *child = val;
     return child;
 }
 
@@ -516,7 +476,7 @@ tr_variant* tr_variantDictAddBool(tr_variant* const var, tr_quark key, bool val)
 {
     tr_variantDictRemove(var, key);
     auto* const child = tr_variantDictAdd(var, key);
-    tr_variantInitBool(child, val);
+    *child = val;
     return child;
 }
 
@@ -524,15 +484,7 @@ tr_variant* tr_variantDictAddReal(tr_variant* const var, tr_quark key, double va
 {
     tr_variantDictRemove(var, key);
     auto* const child = tr_variantDictAdd(var, key);
-    tr_variantInitReal(child, val);
-    return child;
-}
-
-tr_variant* tr_variantDictAddQuark(tr_variant* const var, tr_quark key, tr_quark const val)
-{
-    tr_variantDictRemove(var, key);
-    auto* const child = tr_variantDictAdd(var, key);
-    tr_variantInitQuark(child, val);
+    *child = val;
     return child;
 }
 
@@ -540,7 +492,7 @@ tr_variant* tr_variantDictAddStr(tr_variant* const var, tr_quark key, std::strin
 {
     tr_variantDictRemove(var, key);
     auto* const child = tr_variantDictAdd(var, key);
-    tr_variantInitStr(child, val);
+    *child = val;
     return child;
 }
 
@@ -548,7 +500,7 @@ tr_variant* tr_variantDictAddStrView(tr_variant* const var, tr_quark key, std::s
 {
     tr_variantDictRemove(var, key);
     auto* const child = tr_variantDictAdd(var, key);
-    tr_variantInitStrView(child, val);
+    *child = tr_variant::unmanaged_string(val);
     return child;
 }
 
@@ -776,9 +728,7 @@ void tr_variant_serde::walk(tr_variant const& top, WalkFuncs const& walk_funcs, 
                 if (node.current()->holds_alternative<tr_variant::Map>())
                 {
                     auto const keystr = tr_quark_get_string_view(key);
-                    auto tmp = tr_variant{};
-                    tr_variantInitQuark(&tmp, key);
-                    walk_funcs.string_func(tmp, keystr, user_data);
+                    walk_funcs.string_func(tr_variant::unmanaged_string(keystr), keystr, user_data);
                 }
             }
             else // finished with this node
@@ -868,14 +818,9 @@ void tr_variantMergeDicts(tr_variant* const tgt, tr_variant const* const src)
 
 // ---
 
-tr_variant_serde::~tr_variant_serde()
-{
-    tr_error_clear(&error_);
-}
-
 std::optional<tr_variant> tr_variant_serde::parse(std::string_view input)
 {
-    tr_error_clear(&error_);
+    error_ = {};
     return type_ == Type::Json ? parse_json(input) : parse_benc(input);
 }
 
@@ -901,13 +846,13 @@ bool tr_variant_serde::to_file(tr_variant const& var, std::string_view filename)
 {
     tr_file_save(filename, to_string(var), &error_);
 
-    if (error_ != nullptr)
+    if (error_)
     {
         tr_logAddError(fmt::format(
             _("Couldn't save '{path}': {error} ({error_code})"),
             fmt::arg("path", filename),
-            fmt::arg("error", error_->message),
-            fmt::arg("error_code", error_->code)));
+            fmt::arg("error", error_.message()),
+            fmt::arg("error_code", error_.code())));
         return false;
     }
 

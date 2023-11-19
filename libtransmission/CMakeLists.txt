@@ -288,7 +288,7 @@ target_link_libraries(${TR_NAME}
         ${LIBM_LIBRARY}
         ${LIBQUOTA_LIBRARY}
         ${TR_NETWORK_LIBRARIES}
-        jsonsl
+        RapidJSON
         utf8::cpp
         wildmat
         WideInteger::WideInteger
@@ -324,6 +324,7 @@ if(INSTALL_LIB)
             tr-strbuf.h
             transmission.h
             utils.h
+            values.h
             variant.h
             watchdir.h
             web-utils.h

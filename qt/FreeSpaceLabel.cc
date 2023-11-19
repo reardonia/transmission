@@ -1,4 +1,4 @@
-// This file Copyright © 2013-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -78,7 +78,7 @@ void FreeSpaceLabel::onTimer()
             // update the label
             if (auto const bytes = dictFind<int64_t>(r.args.get(), TR_KEY_size_bytes); bytes && *bytes > 1)
             {
-                setText(tr("%1 free").arg(Formatter::get().sizeToString(*bytes)));
+                setText(tr("%1 free").arg(Formatter::storage_to_string(*bytes)));
             }
             else
             {

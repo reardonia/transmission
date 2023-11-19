@@ -1,4 +1,4 @@
-// This file Copyright © 2006-2023 Transmission authors and contributors.
+// This file Copyright © Transmission authors and contributors.
 // It may be used under the 3-Clause BSD (SPDX: BSD-3-Clause),
 // GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
@@ -21,7 +21,7 @@
 #include <stdbool.h> // bool
 #endif
 
-#include "tr-macros.h"
+#include "libtransmission/tr-macros.h"
 
 using tr_file_index_t = size_t;
 using tr_piece_index_t = uint32_t;
@@ -32,8 +32,6 @@ using tr_byte_index_t = uint64_t;
 using tr_tracker_tier_t = uint32_t;
 using tr_tracker_id_t = uint32_t;
 using tr_torrent_id_t = int;
-using tr_bytes_per_second_t = size_t;
-using tr_kilobytes_per_second_t = size_t;
 using tr_mode_t = uint16_t;
 
 struct tr_block_span_t
@@ -450,7 +448,7 @@ bool tr_sessionIsLPDEnabled(tr_session const* session);
 void tr_sessionSetLPDEnabled(tr_session* session, bool is_enabled);
 
 size_t tr_sessionGetCacheLimit_MB(tr_session const* session);
-void tr_sessionSetCacheLimit_MB(tr_session* session, size_t mb);
+void tr_sessionSetCacheLimit_MB(tr_session* session, size_t mbytes);
 
 tr_encryption_mode tr_sessionGetEncryption(tr_session const* session);
 void tr_sessionSetEncryption(tr_session* session, tr_encryption_mode mode);
@@ -489,16 +487,16 @@ enum tr_direction
 
 // --- Session primary speed limits
 
-tr_kilobytes_per_second_t tr_sessionGetSpeedLimit_KBps(tr_session const* session, tr_direction dir);
-void tr_sessionSetSpeedLimit_KBps(tr_session* session, tr_direction dir, tr_kilobytes_per_second_t limit);
+size_t tr_sessionGetSpeedLimit_KBps(tr_session const* session, tr_direction dir);
+void tr_sessionSetSpeedLimit_KBps(tr_session* session, tr_direction dir, size_t limit_kbyps);
 
 bool tr_sessionIsSpeedLimited(tr_session const* session, tr_direction dir);
 void tr_sessionLimitSpeed(tr_session* session, tr_direction dir, bool limited);
 
 // --- Session alt speed limits
 
-tr_kilobytes_per_second_t tr_sessionGetAltSpeed_KBps(tr_session const* session, tr_direction dir);
-void tr_sessionSetAltSpeed_KBps(tr_session* session, tr_direction dir, tr_kilobytes_per_second_t limit);
+size_t tr_sessionGetAltSpeed_KBps(tr_session const* session, tr_direction dir);
+void tr_sessionSetAltSpeed_KBps(tr_session* session, tr_direction dir, size_t limit_kbyps);
 
 bool tr_sessionUsesAltSpeed(tr_session const* session);
 void tr_sessionUseAltSpeed(tr_session* session, bool enabled);
@@ -764,15 +762,15 @@ bool tr_ctorGetDeleteSource(tr_ctor const* ctor, bool* setme_do_delete);
 void tr_ctorSetDeleteSource(tr_ctor* ctor, bool delete_source);
 
 /** @brief Set the constructor's metainfo from a magnet link */
-bool tr_ctorSetMetainfoFromMagnetLink(tr_ctor* ctor, char const* magnet, tr_error** error);
+bool tr_ctorSetMetainfoFromMagnetLink(tr_ctor* ctor, char const* magnet, tr_error* error);
 
 tr_torrent_metainfo const* tr_ctorGetMetainfo(tr_ctor const* ctor);
 
 /** @brief Set the constructor's metainfo from a raw benc already in memory */
-bool tr_ctorSetMetainfo(tr_ctor* ctor, char const* metainfo, size_t len, tr_error** error);
+bool tr_ctorSetMetainfo(tr_ctor* ctor, char const* metainfo, size_t len, tr_error* error);
 
 /** @brief Set the constructor's metainfo from a local torrent file */
-bool tr_ctorSetMetainfoFromFile(tr_ctor* ctor, char const* filename, tr_error** error);
+bool tr_ctorSetMetainfoFromFile(tr_ctor* ctor, char const* filename, tr_error* error);
 
 /** @brief Get this peer constructor's peer limit */
 bool tr_ctorGetPeerLimit(tr_ctor const* ctor, tr_ctorMode mode, uint16_t* setme_count);
@@ -841,7 +839,7 @@ tr_torrent* tr_torrentNew(tr_ctor* ctor, tr_torrent** setme_duplicate_of);
 /** @addtogroup tr_torrent Torrents
     @{ */
 
-using tr_fileFunc = bool (*)(char const* filename, void* user_data, struct tr_error** error);
+using tr_fileFunc = bool (*)(char const* filename, void* user_data, tr_error* error);
 
 /** @brief Removes our torrent and .resume files for this torrent */
 void tr_torrentRemove(tr_torrent* torrent, bool delete_flag, tr_fileFunc delete_func, void* user_data);
@@ -922,12 +920,7 @@ enum
  * will be clobbered s.t. additional files being added will be saved
  * to the torrent's downloadDir.
  */
-void tr_torrentSetLocation(
-    tr_torrent* torrent,
-    char const* location,
-    bool move_from_old_path,
-    double volatile* setme_progress,
-    int volatile* setme_state);
+void tr_torrentSetLocation(tr_torrent* torrent, char const* location, bool move_from_old_path, int volatile* setme_state);
 
 uint64_t tr_torrentGetBytesLeftToAllocate(tr_torrent const* torrent);
 
@@ -957,8 +950,6 @@ bool tr_torrentSetMetainfoFromFile(tr_torrent* torrent, tr_torrent_metainfo cons
  */
 char const* tr_torrentName(tr_torrent const* tor);
 
-uint64_t tr_torrentTotalSize(tr_torrent const* tor);
-
 /**
  * @brief find the location of a torrent's file by looking with and without
  *        the ".part" suffix, looking in downloadDir and incompleteDir, etc.
@@ -975,8 +966,8 @@ size_t tr_torrentFindFileToBuf(tr_torrent const* tor, tr_file_index_t file_num, 
 
 // --- Torrent speed limits
 
-tr_kilobytes_per_second_t tr_torrentGetSpeedLimit_KBps(tr_torrent const* tor, tr_direction dir);
-void tr_torrentSetSpeedLimit_KBps(tr_torrent* tor, tr_direction dir, tr_kilobytes_per_second_t kilo_per_second);
+size_t tr_torrentGetSpeedLimit_KBps(tr_torrent const* tor, tr_direction dir);
+void tr_torrentSetSpeedLimit_KBps(tr_torrent* tor, tr_direction dir, size_t limit_kbyps);
 
 bool tr_torrentUsesSpeedLimit(tr_torrent const* tor, tr_direction dir);
 void tr_torrentUseSpeedLimit(tr_torrent* tor, tr_direction dir, bool enabled);
@@ -1339,7 +1330,7 @@ struct tr_webseed_view
 {
     char const* url; // the url to download from
     bool is_downloading; // can be true even if speed is 0, e.g. slow download
-    tr_bytes_per_second_t download_bytes_per_second; // current download speed
+    uint64_t download_bytes_per_second; // current download speed
 };
 
 struct tr_webseed_view tr_torrentWebseed(tr_torrent const* torrent, size_t nth);
@@ -1452,9 +1443,9 @@ struct tr_stat
     char const* errorString;
 
     /** Byte count of all the piece data we'll have downloaded when we're done,
-        whether or not we have it yet. This may be less than `tr_torrentTotalSize()`
-        if only some of the torrent's files are wanted.
-        [0...tr_torrentTotalSize()] */
+        whether or not we have it yet. If we only want some of the files,
+        this may be less than `tr_torrent_view.total_size`.
+        [0...tr_torrent_view.total_size] */
     uint64_t sizeWhenDone;
 
     /** Byte count of how much data is left to be downloaded until we've got
@@ -1581,9 +1572,13 @@ struct tr_stat
     /** Number of peers that we're connected to */
     uint16_t peersConnected;
 
-    /** How many peers we found out about from the tracker, or from pex,
+    /** How many connected peers we found out about from the tracker, or from pex,
         or from incoming connections, or from our resume file. */
     uint16_t peersFrom[TR_PEER_FROM__MAX];
+
+    /** How many known peers we found out about from the tracker, or from pex,
+        or from incoming connections, or from our resume file. */
+    uint16_t knownPeersFrom[TR_PEER_FROM__MAX];
 
     /** Number of peers that are sending data to us. */
     uint16_t peersSendingToUs;

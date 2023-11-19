@@ -1,4 +1,4 @@
-// This file Copyright © 2013-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -16,7 +16,7 @@ using namespace std::literals;
 namespace
 {
 
-auto constexpr MyStatic = std::array<std::string_view, 405>{ ""sv,
+auto constexpr MyStatic = std::array<std::string_view, 406>{ ""sv,
                                                              "activeTorrentCount"sv,
                                                              "activity-date"sv,
                                                              "activityDate"sv,
@@ -154,6 +154,7 @@ auto constexpr MyStatic = std::array<std::string_view, 405>{ ""sv,
                                                              "incomplete-dir-enabled"sv,
                                                              "info"sv,
                                                              "inhibit-desktop-hibernation"sv,
+                                                             "ipProtocol"sv,
                                                              "ipv4"sv,
                                                              "ipv6"sv,
                                                              "isBackup"sv,

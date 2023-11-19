@@ -1,4 +1,4 @@
-// This file Copyright © 2008-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -225,6 +225,11 @@ public:
         auto const lock = std::unique_lock{ tasks_mutex_ };
         queued_tasks_.emplace_back(*this, std::move(options));
         queued_tasks_cv_.notify_one();
+    }
+
+    [[nodiscard]] bool is_idle() const noexcept
+    {
+        return std::empty(queued_tasks_) && std::empty(running_tasks_);
     }
 
     class Task
@@ -621,11 +626,6 @@ public:
         }
     }
 
-    [[nodiscard]] bool is_idle() const noexcept
-    {
-        return std::empty(queued_tasks_) && std::empty(running_tasks_);
-    }
-
     void remove_task(Task const& task)
     {
         auto const lock = std::unique_lock{ tasks_mutex_ };
@@ -808,4 +808,9 @@ void tr_web::fetch(FetchOptions&& options)
 void tr_web::startShutdown(std::chrono::milliseconds deadline)
 {
     impl_->startShutdown(deadline);
+}
+
+bool tr_web::is_idle() const noexcept
+{
+    return impl_->is_idle();
 }

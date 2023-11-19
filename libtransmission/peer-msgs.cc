@@ -1,4 +1,4 @@
-// This file Copyright © 2007-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -7,8 +7,8 @@
 #include <array>
 #include <bitset>
 #include <cerrno>
-#include <cstdint>
-#include <cstring>
+#include <cstddef>
+#include <cstdint> // uint8_t, uint32_t, int64_t
 #include <ctime>
 #include <iterator>
 #include <map>
@@ -17,6 +17,7 @@
 #include <queue>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -380,16 +381,9 @@ public:
         }
     }
 
-    bool isTransferringPieces(uint64_t now, tr_direction dir, tr_bytes_per_second_t* setme_bytes_per_second) const override
+    [[nodiscard]] Speed get_piece_speed(uint64_t now, tr_direction dir) const override
     {
-        auto const bytes_per_second = io->get_piece_speed_bytes_per_second(now, dir);
-
-        if (setme_bytes_per_second != nullptr)
-        {
-            *setme_bytes_per_second = bytes_per_second;
-        }
-
-        return bytes_per_second > 0;
+        return io->get_piece_speed(now, dir);
     }
 
     [[nodiscard]] size_t activeReqCount(tr_direction dir) const noexcept override
@@ -558,19 +552,18 @@ private:
         // Get the rate limit we should use.
         // TODO: this needs to consider all the other peers as well...
         uint64_t const now = tr_time_msec();
-        auto rate_bytes_per_second = get_piece_speed_bytes_per_second(now, TR_PEER_TO_CLIENT);
+        auto rate = get_piece_speed(now, TR_PEER_TO_CLIENT);
         if (torrent->uses_speed_limit(TR_PEER_TO_CLIENT))
         {
-            rate_bytes_per_second = std::min(rate_bytes_per_second, torrent->speed_limit_bps(TR_PEER_TO_CLIENT));
+            rate = std::min(rate, torrent->speed_limit(TR_PEER_TO_CLIENT));
         }
 
         // honor the session limits, if enabled
         if (torrent->uses_session_limits())
         {
-            if (auto const irate_bytes_per_second = torrent->session->activeSpeedLimitBps(TR_PEER_TO_CLIENT);
-                irate_bytes_per_second)
+            if (auto const limit = torrent->session->active_speed_limit(TR_PEER_TO_CLIENT); limit)
             {
-                rate_bytes_per_second = std::min(rate_bytes_per_second, *irate_bytes_per_second);
+                rate = std::min(rate, *limit);
             }
         }
 
@@ -578,7 +571,7 @@ private:
         // many requests we should send to this peer
         size_t constexpr Floor = 32;
         size_t constexpr Seconds = RequestBufSecs;
-        size_t const estimated_blocks_in_period = (rate_bytes_per_second * Seconds) / tr_block_info::BlockSize;
+        size_t const estimated_blocks_in_period = (rate.base_quantity() * Seconds) / tr_block_info::BlockSize;
         size_t const ceil = reqq ? *reqq : 250;
 
         auto max_reqs = estimated_blocks_in_period;
@@ -916,16 +909,9 @@ void cancelAllRequestsToClient(tr_peerMsgsImpl* msgs)
 
 void sendLtepHandshake(tr_peerMsgsImpl* msgs)
 {
-    static tr_quark version_quark = 0;
-
     if (msgs->clientSentLtepHandshake)
     {
         return;
-    }
-
-    if (version_quark == 0)
-    {
-        version_quark = tr_quark_new(TR_NAME " " USERAGENT_PREFIX);
     }
 
     logtrace(msgs, "sending an ltep handshake");
@@ -998,7 +984,7 @@ void sendLtepHandshake(tr_peerMsgsImpl* msgs)
     // Client name and version (as a utf-8 string). This is a much more
     // reliable way of identifying the client than relying on the
     // peer id encoding.
-    tr_variantDictAddQuark(&val, TR_KEY_v, version_quark);
+    tr_variantDictAddStrView(&val, TR_KEY_v, TR_NAME " " USERAGENT_PREFIX);
 
     // http://bittorrent.org/beps/bep_0021.html
     // A peer that is a partial seed SHOULD include an extra header in
@@ -1719,17 +1705,17 @@ ReadState canRead(tr_peerIo* io, void* vmsgs, size_t* piece)
         }
 
         io->read_uint32(&message_len);
-        current_message_len = message_len;
 
         // The keep-alive message is a message with zero bytes,
         // specified with the length prefix set to zero.
         // There is no message ID and no payload.
-        if (auto const is_keepalive = message_len == uint32_t{}; is_keepalive)
+        if (message_len == 0U)
         {
             logtrace(msgs, "got KeepAlive");
-            current_message_len.reset();
             return READ_NOW;
         }
+
+        current_message_len = message_len;
     }
 
     // read <message ID>
@@ -1748,37 +1734,30 @@ ReadState canRead(tr_peerIo* io, void* vmsgs, size_t* piece)
 
     // read <payload>
     auto& current_payload = msgs->incoming.payload;
-    auto const full_payload_len = *current_message_len - sizeof(uint8_t /*message_type*/);
+    auto const full_payload_len = *current_message_len - sizeof(*current_message_type);
     auto n_left = full_payload_len - std::size(current_payload);
-    while (n_left > 0U && io->read_buffer_size() > 0U)
-    {
-        auto buf = std::array<char, tr_block_info::BlockSize>{};
-        auto const n_this_pass = std::min({ n_left, io->read_buffer_size(), std::size(buf) });
-        io->read_bytes(std::data(buf), n_this_pass);
-        current_payload.add(std::data(buf), n_this_pass);
-        n_left -= n_this_pass;
-        logtrace(msgs, fmt::format("read {:d} payload bytes; {:d} left to go", n_this_pass, n_left));
-    }
+    auto const [buf, n_this_pass] = current_payload.reserve_space(std::min(n_left, io->read_buffer_size()));
+    io->read_bytes(buf, n_this_pass);
+    current_payload.commit_space(n_this_pass);
+    n_left -= n_this_pass;
+    logtrace(msgs, fmt::format("read {:d} payload bytes; {:d} left to go", n_this_pass, n_left));
 
     if (n_left > 0U)
     {
         return READ_LATER;
     }
 
-    // The incoming message is now complete. Reset the peerMsgs' incoming
-    // field so it's ready to receive the next message, then process the
-    // current one with `process_peer_message()`.
+    // The incoming message is now complete. After processing the message
+    // with `process_peer_message()`, reset the peerMsgs' incoming
+    // field so it's ready to receive the next message.
+
+    auto const [read_state, n_piece_bytes_read] = process_peer_message(msgs, *current_message_type, current_payload);
+    *piece = n_piece_bytes_read;
 
     current_message_len.reset();
-    auto const message_type = *current_message_type;
     current_message_type.reset();
-
-    auto payload = MessageBuffer{};
-    payload.add(current_payload);
     current_payload.clear();
 
-    auto const [read_state, n_piece_bytes_read] = process_peer_message(msgs, message_type, payload);
-    *piece = n_piece_bytes_read;
     return read_state;
 }
 
@@ -1886,7 +1865,7 @@ namespace peer_pulse_helpers
 
         if (!ok)
         {
-            msgs->torrent->set_local_error(
+            msgs->torrent->error().set_local_error(
                 fmt::format(FMT_STRING("Please Verify Local Data! Piece #{:d} is corrupt."), req.index));
         }
     }

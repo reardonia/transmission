@@ -1,4 +1,4 @@
-// This file Copyright © 2023-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -20,7 +20,6 @@
 #include "libtransmission/log.h"
 #include "libtransmission/global-ip-cache.h"
 #include "libtransmission/tr-assert.h"
-#include "libtransmission/tr-macros.h"
 #include "libtransmission/utils.h"
 
 namespace
@@ -186,7 +185,7 @@ bool tr_global_ip_cache::try_shutdown() noexcept
 
 tr_address tr_global_ip_cache::bind_addr(tr_address_type type) const noexcept
 {
-    if (type == TR_AF_INET || type == TR_AF_INET6)
+    if (tr_address::is_valid(type))
     {
         if (auto const addr = tr_address::from_string(mediator_.settings_bind_addr(type)); addr && type == addr->type)
         {

@@ -1,4 +1,4 @@
-// This file Copyright © 2005-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -15,18 +15,21 @@
 #include <string_view>
 #include <utility>
 
-#include "transmission.h"
+#include "libtransmission/transmission.h"
 
-#include "file.h" // tr_sys_file_t
-#include "lru-cache.h"
+#include "libtransmission/file.h" // tr_sys_file_t
+#include "libtransmission/lru-cache.h"
 
 // A pool of open files that are cached while reading / writing torrents' data
 class tr_open_files
 {
 public:
-    [[nodiscard]] std::optional<tr_sys_file_t> get(tr_torrent_id_t tor_id, tr_file_index_t file_num, bool writable);
+    [[nodiscard]] std::optional<std::pair<tr_sys_file_t, libtransmission::ObserverTag>> get(
+        tr_torrent_id_t tor_id,
+        tr_file_index_t file_num,
+        bool writable);
 
-    [[nodiscard]] std::optional<tr_sys_file_t> get(
+    [[nodiscard]] std::optional<std::pair<tr_sys_file_t, libtransmission::ObserverTag>> get(
         tr_torrent_id_t tor_id,
         tr_file_index_t file_num,
         bool writable,
@@ -67,6 +70,6 @@ private:
         bool writable_ = false;
     };
 
-    static constexpr size_t MaxOpenFiles = 32;
+    static constexpr size_t MaxOpenFiles = 32U;
     tr_lru_cache<Key, Val, MaxOpenFiles> pool_;
 };

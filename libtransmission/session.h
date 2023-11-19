@@ -1,4 +1,4 @@
-// This file Copyright © 2008-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -46,15 +46,16 @@
 #include "libtransmission/global-ip-cache.h"
 #include "libtransmission/interned-string.h"
 #include "libtransmission/net.h" // tr_socket_t
-#include "libtransmission/observable.h"
 #include "libtransmission/open-files.h"
 #include "libtransmission/port-forwarding.h"
 #include "libtransmission/quark.h"
+#include "libtransmission/rpc-server.h"
 #include "libtransmission/session-alt-speeds.h"
 #include "libtransmission/session-id.h"
 #include "libtransmission/session-settings.h"
 #include "libtransmission/session-thread.h"
 #include "libtransmission/stats.h"
+#include "libtransmission/timer.h"
 #include "libtransmission/torrents.h"
 #include "libtransmission/tr-assert.h"
 #include "libtransmission/tr-dht.h"
@@ -68,18 +69,11 @@ tr_peer_id_t tr_peerIdInit();
 
 class tr_peer_socket;
 struct tr_pex;
-class tr_rpc_server;
 struct tr_torrent;
 #ifdef WITH_UTP
 struct struct_utp_context;
 #endif
 struct tr_variant;
-
-namespace libtransmission
-{
-class Timer;
-class TimerMaker;
-} // namespace libtransmission
 
 namespace libtransmission::test
 {
@@ -91,6 +85,9 @@ class SessionTest;
 /** @brief handle to an active libtransmission session */
 struct tr_session
 {
+    using Memory = libtransmission::Values::Memory;
+    using Speed = libtransmission::Values::Speed;
+
 private:
     class BoundSocket
     {
@@ -490,12 +487,21 @@ public:
 
     // blocklist
 
-    [[nodiscard]] constexpr auto useBlocklist() const noexcept
+    [[nodiscard]] constexpr auto& blocklist() noexcept
+    {
+        return blocklists_;
+    }
+
+    void set_blocklist_enabled(bool is_enabled)
+    {
+        settings_.blocklist_enabled = is_enabled;
+        blocklist().set_enabled(is_enabled);
+    }
+
+    [[nodiscard]] auto blocklist_enabled() const noexcept
     {
         return settings_.blocklist_enabled;
     }
-
-    void useBlocklist(bool enabled);
 
     [[nodiscard]] constexpr auto const& blocklistUrl() const noexcept
     {
@@ -586,14 +592,6 @@ public:
     {
         queue_start_callback_ = cb;
         queue_start_user_data_ = user_data;
-    }
-
-    void onQueuedTorrentStarted(tr_torrent* tor)
-    {
-        if (queue_start_callback_ != nullptr)
-        {
-            queue_start_callback_(this, tor, queue_start_user_data_);
-        }
     }
 
     constexpr void setIdleLimitHitCallback(tr_session_idle_limit_hit_func cb, void* user_data)
@@ -805,11 +803,6 @@ public:
         return settings_.idle_seeding_limit_minutes;
     }
 
-    [[nodiscard]] std::vector<tr_torrent*> getAllTorrents() const
-    {
-        return std::vector<tr_torrent*>{ std::begin(torrents()), std::end(torrents()) };
-    }
-
     /*module_visible*/
 
     auto rpcNotify(tr_rpc_callback_type type, tr_torrent* tor = nullptr)
@@ -822,15 +815,11 @@ public:
         return TR_RPC_OK;
     }
 
-    [[nodiscard]] size_t countQueueFreeSlots(tr_direction dir) const noexcept;
-
-    [[nodiscard]] std::vector<tr_torrent*> getNextQueuedTorrents(tr_direction dir, size_t num_wanted) const;
-
-    [[nodiscard]] bool addressIsBlocked(tr_address const& addr) const noexcept;
+    [[nodiscard]] size_t count_queue_free_slots(tr_direction dir) const noexcept;
 
     [[nodiscard]] bool has_ip_protocol(tr_address_type type) const noexcept
     {
-        TR_ASSERT(type == TR_AF_INET || type == TR_AF_INET6);
+        TR_ASSERT(tr_address::is_valid(type));
         return global_ip_cache_->has_ip_protocol(type);
     }
 
@@ -838,7 +827,7 @@ public:
 
     [[nodiscard]] std::optional<tr_address> global_address(tr_address_type type) const noexcept
     {
-        TR_ASSERT(type == TR_AF_INET || type == TR_AF_INET6);
+        TR_ASSERT(tr_address::is_valid(type));
         return global_ip_cache_->global_addr(type);
     }
 
@@ -849,26 +838,34 @@ public:
 
     [[nodiscard]] std::optional<tr_address> global_source_address(tr_address_type type) const noexcept
     {
-        TR_ASSERT(type == TR_AF_INET || type == TR_AF_INET6);
+        TR_ASSERT(tr_address::is_valid(type));
         return global_ip_cache_->global_source_addr(type);
     }
 
-    [[nodiscard]] constexpr auto speedLimitKBps(tr_direction dir) const noexcept
+    [[nodiscard]] auto speed_limit(tr_direction const dir) const noexcept
     {
-        return dir == TR_DOWN ? settings_.speed_limit_down : settings_.speed_limit_up;
+        auto const kbyps = dir == TR_DOWN ? settings_.speed_limit_down : settings_.speed_limit_up;
+        return Speed{ kbyps, Speed::Units::KByps };
     }
 
-    [[nodiscard]] constexpr auto isSpeedLimited(tr_direction dir) const noexcept
+    void set_speed_limit(tr_direction dir, Speed limit) noexcept
+    {
+        auto& tgt = dir == TR_DOWN ? settings_.speed_limit_down : settings_.speed_limit_up;
+        tgt = limit.count(Speed::Units::KByps);
+        update_bandwidth(dir);
+    }
+
+    [[nodiscard]] constexpr auto is_speed_limited(tr_direction dir) const noexcept
     {
         return dir == TR_DOWN ? settings_.speed_limit_down_enabled : settings_.speed_limit_up_enabled;
     }
 
-    [[nodiscard]] auto pieceSpeedBps(tr_direction dir) const noexcept
+    [[nodiscard]] auto piece_speed(tr_direction dir) const noexcept
     {
-        return top_bandwidth_.get_piece_speed_bytes_per_second(0, dir);
+        return top_bandwidth_.get_piece_speed(0, dir);
     }
 
-    [[nodiscard]] std::optional<tr_bytes_per_second_t> activeSpeedLimitBps(tr_direction dir) const noexcept;
+    [[nodiscard]] std::optional<Speed> active_speed_limit(tr_direction dir) const noexcept;
 
     [[nodiscard]] constexpr auto isIncompleteFileNamingEnabled() const noexcept
     {
@@ -890,21 +887,8 @@ public:
         return settings_.ratio_limit;
     }
 
-    void verifyRemove(tr_torrent* tor)
-    {
-        if (verifier_)
-        {
-            verifier_->remove(tor);
-        }
-    }
-
-    void verifyAdd(tr_torrent* tor)
-    {
-        if (verifier_)
-        {
-            verifier_->add(tor);
-        }
-    }
+    void verify_add(tr_torrent* tor);
+    void verify_remove(tr_torrent const* tor);
 
     void fetch(tr_web::FetchOptions&& options) const
     {
@@ -962,6 +946,8 @@ private:
         return settings_.script_torrent_done_seeding_filename;
     }
 
+    void update_bandwidth(tr_direction dir);
+
     [[nodiscard]] tr_port randomPort() const;
 
     void onAdvertisedPeerPortChanged();
@@ -974,7 +960,9 @@ private:
     void closeImplPart1(std::promise<void>* closed_promise, std::chrono::time_point<std::chrono::steady_clock> deadline);
     void closeImplPart2(std::promise<void>* closed_promise, std::chrono::time_point<std::chrono::steady_clock> deadline);
 
-    void onNowTimer();
+    void on_now_timer();
+    void on_queue_timer();
+    void on_save_timer();
 
     static void onIncomingPeerConnection(tr_socket_t fd, void* vsession);
 
@@ -996,8 +984,7 @@ private:
     friend size_t tr_sessionGetAltSpeedBegin(tr_session const* session);
     friend size_t tr_sessionGetAltSpeedEnd(tr_session const* session);
     friend size_t tr_sessionGetCacheLimit_MB(tr_session const* session);
-    friend tr_kilobytes_per_second_t tr_sessionGetAltSpeed_KBps(tr_session const* session, tr_direction dir);
-    friend tr_kilobytes_per_second_t tr_sessionGetSpeedLimit_KBps(tr_session const* session, tr_direction dir);
+    friend size_t tr_sessionGetAltSpeed_KBps(tr_session const* session, tr_direction dir);
     friend tr_port_forwarding_state tr_sessionGetPortForwarding(tr_session const* session);
     friend tr_sched_day tr_sessionGetAltSpeedDay(tr_session const* session);
     friend tr_session* tr_sessionInit(char const* config_dir, bool message_queueing_enabled, tr_variant const& client_settings);
@@ -1013,10 +1000,10 @@ private:
     friend void tr_sessionSetAltSpeedDay(tr_session* session, tr_sched_day days);
     friend void tr_sessionSetAltSpeedEnd(tr_session* session, size_t minutes_since_midnight);
     friend void tr_sessionSetAltSpeedFunc(tr_session* session, tr_altSpeedFunc func, void* user_data);
-    friend void tr_sessionSetAltSpeed_KBps(tr_session* session, tr_direction dir, tr_bytes_per_second_t limit);
+    friend void tr_sessionSetAltSpeed_KBps(tr_session* session, tr_direction dir, size_t limit_kbyps);
     friend void tr_sessionSetAntiBruteForceEnabled(tr_session* session, bool is_enabled);
     friend void tr_sessionSetAntiBruteForceThreshold(tr_session* session, int max_bad_requests);
-    friend void tr_sessionSetCacheLimit_MB(tr_session* session, size_t mb);
+    friend void tr_sessionSetCacheLimit_MB(tr_session* session, size_t mbytes);
     friend void tr_sessionSetDHTEnabled(tr_session* session, bool enabled);
     friend void tr_sessionSetDeleteSource(tr_session* session, bool delete_source);
     friend void tr_sessionSetEncryption(tr_session* session, tr_encryption_mode mode);
@@ -1043,7 +1030,6 @@ private:
     friend void tr_sessionSetRPCUsername(tr_session* session, char const* username);
     friend void tr_sessionSetRatioLimit(tr_session* session, double desired_ratio);
     friend void tr_sessionSetRatioLimited(tr_session* session, bool is_limited);
-    friend void tr_sessionSetSpeedLimit_KBps(tr_session* session, tr_direction dir, tr_kilobytes_per_second_t limit);
     friend void tr_sessionSetUTPEnabled(tr_session* session, bool enabled);
     friend void tr_sessionUseAltSpeed(tr_session* session, bool enabled);
     friend void tr_sessionUseAltSpeedTime(tr_session* session, bool enabled);
@@ -1114,10 +1100,6 @@ private:
     /// fields that aren't trivial,
     /// but are self-contained / don't hold references to others
 
-    // used during shutdown:
-    // how many &event=stopped announces are still being sent to trackers
-    std::atomic<size_t> n_pending_stops_ = {};
-
     mutable std::recursive_mutex session_mutex_;
 
     tr_stats session_stats_{ config_dir_, time(nullptr) };
@@ -1128,10 +1110,7 @@ private:
 
     tr_open_files open_files_;
 
-    std::vector<libtransmission::Blocklist> blocklists_;
-
-public:
-    libtransmission::SimpleObservable<> blocklist_changed_;
+    libtransmission::Blocklists blocklists_;
 
 private:
     /// other fields
@@ -1182,10 +1161,10 @@ private:
 
 public:
     // depends-on: settings_, open_files_, torrents_
-    std::unique_ptr<Cache> cache = std::make_unique<Cache>(torrents_, 1024 * 1024 * 2);
+    std::unique_ptr<Cache> cache = std::make_unique<Cache>(torrents_, Memory{ 2U, Memory::Units::MBytes });
 
 private:
-    // depends-on: timer_maker_, top_bandwidth_, utp_context, torrents_, web_, blocklist_changed_
+    // depends-on: timer_maker_, blocklists_, top_bandwidth_, utp_context, torrents_, web_
     std::unique_ptr<struct tr_peerMgr, void (*)(struct tr_peerMgr*)> peer_mgr_;
 
     // depends-on: peer_mgr_, advertised_peer_port_, torrents_
@@ -1205,7 +1184,7 @@ public:
     std::unique_ptr<tr_announcer_udp> announcer_udp_ = tr_announcer_udp::create(announcer_udp_mediator_);
 
     // depends-on: settings_, torrents_, web_, announcer_udp_
-    std::unique_ptr<tr_announcer> announcer_ = tr_announcer::create(this, *announcer_udp_, n_pending_stops_);
+    std::unique_ptr<tr_announcer> announcer_ = tr_announcer::create(this, *announcer_udp_);
 
     // depends-on: public_peer_port_, udp_core_, dht_mediator_
     std::unique_ptr<tr_dht> dht_;
@@ -1216,6 +1195,9 @@ private:
 
     // depends-on: alt_speeds_, udp_core_, torrents_
     std::unique_ptr<libtransmission::Timer> now_timer_;
+
+    // depends-on: torrents_
+    std::unique_ptr<libtransmission::Timer> queue_timer_;
 
     // depends-on: torrents_
     std::unique_ptr<libtransmission::Timer> save_timer_;

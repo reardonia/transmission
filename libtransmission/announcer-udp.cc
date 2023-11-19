@@ -1,4 +1,4 @@
-// This file Copyright © 2010-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -169,7 +169,10 @@ private:
 
 struct tau_announce_request
 {
-    tau_announce_request(uint32_t announce_ip, tr_announce_request const& in, tr_announce_response_func on_response)
+    tau_announce_request(
+        std::optional<tr_address> announce_ip,
+        tr_announce_request const& in,
+        tr_announce_response_func on_response)
         : on_response_{ std::move(on_response) }
     {
         // https://www.bittorrent.org/beps/bep_0015.html sets key size at 32 bits
@@ -187,7 +190,14 @@ struct tau_announce_request
         buf.add_uint64(in.leftUntilComplete);
         buf.add_uint64(in.up);
         buf.add_uint32(get_tau_announce_event(in.event));
-        buf.add_uint32(announce_ip);
+        if (announce_ip && announce_ip->is_ipv4())
+        {
+            buf.add_address(*announce_ip);
+        }
+        else
+        {
+            buf.add_uint32(0U);
+        }
         buf.add_uint32(in.key);
         buf.add_uint32(in.numwant);
         buf.add_port(in.port);
@@ -344,7 +354,7 @@ struct tau_tracker
         }
 
         // are there any requests pending?
-        if (this->isIdle())
+        if (this->is_idle())
         {
             return;
         }
@@ -392,6 +402,11 @@ struct tau_tracker
         }
     }
 
+    [[nodiscard]] bool is_idle() const noexcept
+    {
+        return std::empty(announces) && std::empty(scrapes) && !addr_pending_dns_;
+    }
+
 private:
     using Sockaddr = std::pair<sockaddr_storage, socklen_t>;
     using MaybeSockaddr = std::optional<Sockaddr>;
@@ -432,11 +447,6 @@ private:
 
         logdbg(logname, "DNS lookup succeeded");
         return std::make_pair(ss, len);
-    }
-
-    [[nodiscard]] bool isIdle() const noexcept
-    {
-        return std::empty(announces) && std::empty(scrapes) && !addr_pending_dns_;
     }
 
     void failAll(bool did_connect, bool did_timeout, std::string_view errmsg)
@@ -585,9 +595,7 @@ public:
         }
 
         // Since size of IP field is only 4 bytes long, we can only announce IPv4 addresses
-        auto const addr = mediator_.announce_ip();
-        uint32_t const announce_ip = addr && addr->is_ipv4() ? addr->addr.addr4.s_addr : 0;
-        tracker->announces.emplace_back(announce_ip, request, std::move(on_response));
+        tracker->announces.emplace_back(mediator_.announce_ip(), request, std::move(on_response));
         tracker->upkeep(false);
     }
 
@@ -680,6 +688,11 @@ public:
 
         /* no match... */
         return false;
+    }
+
+    [[nodiscard]] bool is_idle() const noexcept override
+    {
+        return std::all_of(std::begin(trackers_), std::end(trackers_), [](auto const& tracker) { return tracker.is_idle(); });
     }
 
 private:

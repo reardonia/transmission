@@ -1,4 +1,4 @@
-// This file Copyright © 2008-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -13,7 +13,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <vector>
 
 #include <event2/buffer.h>
 
@@ -32,17 +31,20 @@
 #include "libtransmission/torrent.h"
 #include "libtransmission/tr-assert.h"
 #include "libtransmission/tr-macros.h"
+#include "libtransmission/tr-strbuf.h"
 #include "libtransmission/utils-ev.h"
 #include "libtransmission/utils.h"
 #include "libtransmission/web-utils.h"
 #include "libtransmission/web.h"
 #include "libtransmission/webseed.h"
 
+struct evbuffer;
+
 using namespace std::literals;
+using namespace libtransmission::Values;
 
 namespace
 {
-
 class tr_webseed;
 
 void on_idle(tr_webseed* w);
@@ -197,26 +199,9 @@ public:
         return tr_torrentFindFromId(session, torrent_id);
     }
 
-    [[nodiscard]] bool isTransferringPieces( //
-        uint64_t now,
-        tr_direction dir,
-        tr_bytes_per_second_t* setme_bytes_per_second) const override
+    [[nodiscard]] Speed get_piece_speed(uint64_t now, tr_direction dir) const override
     {
-        tr_bytes_per_second_t bytes_per_second = 0;
-        bool is_active = false;
-
-        if (dir == TR_DOWN)
-        {
-            is_active = !std::empty(tasks);
-            bytes_per_second = bandwidth_.get_piece_speed_bytes_per_second(now, dir);
-        }
-
-        if (setme_bytes_per_second != nullptr)
-        {
-            *setme_bytes_per_second = bytes_per_second;
-        }
-
-        return is_active;
+        return dir == TR_DOWN ? bandwidth_.get_piece_speed(now, dir) : Speed{};
     }
 
     [[nodiscard]] TR_CONSTEXPR20 size_t activeReqCount(tr_direction dir) const noexcept override
@@ -517,7 +502,7 @@ void task_request_next_chunk(tr_webseed_task* task)
 
     auto const loc = tor->byte_loc(task->loc.byte + evbuffer_get_length(task->content()));
 
-    auto const [file_index, file_offset] = tor->file_offset(loc);
+    auto const [file_index, file_offset] = tor->file_offset(loc, false);
     auto const left_in_file = tor->file_size(file_index) - file_offset;
     auto const left_in_task = task->end_byte - loc.byte;
     auto const this_chunk = std::min(left_in_file, left_in_task);
@@ -545,13 +530,13 @@ tr_peer* tr_webseedNew(tr_torrent* torrent, std::string_view url, tr_peer_callba
 
 tr_webseed_view tr_webseedView(tr_peer const* peer)
 {
-    auto const* w = dynamic_cast<tr_webseed const*>(peer);
-    if (w == nullptr)
+    auto const* const webseed = dynamic_cast<tr_webseed const*>(peer);
+    if (webseed == nullptr)
     {
         return {};
     }
 
-    auto bytes_per_second = tr_bytes_per_second_t{ 0 };
-    auto const is_downloading = peer->isTransferringPieces(tr_time_msec(), TR_DOWN, &bytes_per_second);
-    return { w->base_url.c_str(), is_downloading, bytes_per_second };
+    auto const is_downloading = !std::empty(webseed->tasks);
+    auto const speed = peer->get_piece_speed(tr_time_msec(), TR_DOWN);
+    return { webseed->base_url.c_str(), is_downloading, speed.base_quantity() };
 }

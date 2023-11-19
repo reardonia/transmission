@@ -1,8 +1,10 @@
-// This file Copyright © 2008-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
 
+#include <algorithm> // std::min
+#include <array>
 #include <cstring>
 #include <ctime>
 #include <string_view>
@@ -12,19 +14,23 @@
 
 #include "libtransmission/transmission.h"
 
+#include "libtransmission/bitfield.h"
 #include "libtransmission/error.h"
 #include "libtransmission/file.h"
 #include "libtransmission/log.h"
-#include "libtransmission/magnet-metainfo.h"
+#include "libtransmission/net.h"
 #include "libtransmission/peer-mgr.h" /* pex */
+#include "libtransmission/quark.h"
 #include "libtransmission/resume.h"
 #include "libtransmission/session.h"
 #include "libtransmission/torrent.h"
+#include "libtransmission/torrent-metainfo.h"
 #include "libtransmission/tr-assert.h"
 #include "libtransmission/utils.h"
 #include "libtransmission/variant.h"
 
 using namespace std::literals;
+using namespace libtransmission::Values;
 
 namespace tr_resume
 {
@@ -84,11 +90,11 @@ auto loadPeers(tr_variant* dict, tr_torrent* tor)
 
 void saveLabels(tr_variant* dict, tr_torrent const* tor)
 {
-    auto const& labels = tor->labels;
+    auto const& labels = tor->labels();
     tr_variant* list = tr_variantDictAddList(dict, TR_KEY_labels, std::size(labels));
     for (auto const& label : labels)
     {
-        tr_variantListAddQuark(list, label);
+        tr_variantListAddStrView(list, label.sv());
     }
 }
 
@@ -101,18 +107,18 @@ auto loadLabels(tr_variant* dict, tr_torrent* tor)
     }
 
     auto const n = tr_variantListSize(list);
-    auto labels = std::vector<tr_quark>{};
+    auto labels = tr_torrent::labels_t{};
     labels.reserve(n);
     for (size_t i = 0; i < n; ++i)
     {
         auto sv = std::string_view{};
         if (tr_variantGetStrView(tr_variantListChild(list, i), &sv) && !std::empty(sv))
         {
-            labels.emplace_back(tr_quark_new(sv));
+            labels.emplace_back(tr_interned_string{ sv });
         }
     }
 
-    tor->setLabels(labels);
+    tor->set_labels(labels);
     return tr_resume::Labels;
 }
 
@@ -232,7 +238,7 @@ auto loadFilePriorities(tr_variant* dict, tr_torrent* tor)
 void saveSingleSpeedLimit(tr_variant* d, tr_torrent const* tor, tr_direction dir)
 {
     tr_variantDictReserve(d, 3);
-    tr_variantDictAddInt(d, TR_KEY_speed_Bps, tor->speed_limit_bps(dir));
+    tr_variantDictAddInt(d, TR_KEY_speed_Bps, tor->speed_limit(dir).base_quantity());
     tr_variantDictAddBool(d, TR_KEY_use_global_speed_limit, tor->uses_session_limits());
     tr_variantDictAddBool(d, TR_KEY_use_speed_limit, tor->uses_speed_limit(dir));
 }
@@ -261,11 +267,11 @@ void loadSingleSpeedLimit(tr_variant* d, tr_direction dir, tr_torrent* tor)
 {
     if (auto val = int64_t{}; tr_variantDictFindInt(d, TR_KEY_speed_Bps, &val))
     {
-        tor->set_speed_limit_bps(dir, val);
+        tor->set_speed_limit(dir, Speed{ val, Speed::Units::Byps });
     }
     else if (tr_variantDictFindInt(d, TR_KEY_speed, &val))
     {
-        tor->set_speed_limit_bps(dir, val * 1024);
+        tor->set_speed_limit(dir, Speed{ val, Speed::Units::KByps });
     }
 
     if (auto val = bool{}; tr_variantDictFindBool(d, TR_KEY_use_speed_limit, &val))
@@ -346,7 +352,7 @@ auto loadIdleLimits(tr_variant* dict, tr_torrent* tor)
 
 void saveName(tr_variant* dict, tr_torrent const* tor)
 {
-    tr_variantDictAddStrView(dict, TR_KEY_name, tr_torrentName(tor));
+    tr_variantDictAddStrView(dict, TR_KEY_name, tor->name());
 }
 
 auto loadName(tr_variant* dict, tr_torrent* tor)
@@ -414,16 +420,16 @@ void bitfieldToRaw(tr_bitfield const& b, tr_variant* benc)
 {
     if (b.has_none() || std::empty(b))
     {
-        tr_variantInitStr(benc, "none"sv);
+        *benc = tr_variant::unmanaged_string("none"sv);
     }
     else if (b.has_all())
     {
-        tr_variantInitStrView(benc, "all"sv);
+        *benc = tr_variant::unmanaged_string("all"sv);
     }
     else
     {
         auto const raw = b.raw();
-        tr_variantInitRaw(benc, raw.data(), std::size(raw));
+        *benc = std::string_view{ reinterpret_cast<char const*>(raw.data()), std::size(raw) };
     }
 }
 
@@ -636,7 +642,7 @@ tr_resume::fields_t loadFromFile(tr_torrent* tor, tr_resume::fields_t fields_to_
     auto otop = serde.parse_file(filename);
     if (!otop)
     {
-        tr_logAddDebugTor(tor, fmt::format("Couldn't read '{}': {}", filename, serde.error_->message));
+        tr_logAddDebugTor(tor, fmt::format("Couldn't read '{}': {}", filename, serde.error_.message()));
         return {};
     }
     auto& top = *otop;
@@ -648,7 +654,7 @@ tr_resume::fields_t loadFromFile(tr_torrent* tor, tr_resume::fields_t fields_to_
 
     if ((fields_to_load & tr_resume::Corrupt) != 0 && tr_variantDictFindInt(&top, TR_KEY_corrupt, &i))
     {
-        tor->corruptPrev = i;
+        tor->bytes_corrupt_.set_prev(i);
         fields_loaded |= tr_resume::Corrupt;
     }
 
@@ -680,13 +686,13 @@ tr_resume::fields_t loadFromFile(tr_torrent* tor, tr_resume::fields_t fields_to_
 
     if ((fields_to_load & tr_resume::Downloaded) != 0 && tr_variantDictFindInt(&top, TR_KEY_downloaded, &i))
     {
-        tor->downloadedPrev = i;
+        tor->bytes_downloaded_.set_prev(i);
         fields_loaded |= tr_resume::Downloaded;
     }
 
     if ((fields_to_load & tr_resume::Uploaded) != 0 && tr_variantDictFindInt(&top, TR_KEY_uploaded, &i))
     {
-        tor->uploadedPrev = i;
+        tor->bytes_uploaded_.set_prev(i);
         fields_loaded |= tr_resume::Uploaded;
     }
 
@@ -865,7 +871,7 @@ fields_t load(tr_torrent* tor, fields_t fields_to_load, tr_ctor const* ctor)
     return ret;
 }
 
-void save(tr_torrent* tor)
+void save(tr_torrent* const tor)
 {
     if (!tr_isTorrent(tor))
     {
@@ -879,17 +885,17 @@ void save(tr_torrent* tor)
     tr_variantDictAddInt(&top, TR_KEY_downloading_time_seconds, tor->seconds_downloading(now));
     tr_variantDictAddInt(&top, TR_KEY_activity_date, tor->activityDate);
     tr_variantDictAddInt(&top, TR_KEY_added_date, tor->addedDate);
-    tr_variantDictAddInt(&top, TR_KEY_corrupt, tor->corruptPrev + tor->corruptCur);
+    tr_variantDictAddInt(&top, TR_KEY_corrupt, tor->bytes_corrupt_.ever());
     tr_variantDictAddInt(&top, TR_KEY_done_date, tor->doneDate);
-    tr_variantDictAddQuark(&top, TR_KEY_destination, tor->download_dir().quark());
+    tr_variantDictAddStrView(&top, TR_KEY_destination, tor->download_dir().sv());
 
     if (!std::empty(tor->incomplete_dir()))
     {
-        tr_variantDictAddQuark(&top, TR_KEY_incomplete_dir, tor->incomplete_dir().quark());
+        tr_variantDictAddStrView(&top, TR_KEY_incomplete_dir, tor->incomplete_dir().sv());
     }
 
-    tr_variantDictAddInt(&top, TR_KEY_downloaded, tor->downloadedPrev + tor->downloadedCur);
-    tr_variantDictAddInt(&top, TR_KEY_uploaded, tor->uploadedPrev + tor->uploadedCur);
+    tr_variantDictAddInt(&top, TR_KEY_downloaded, tor->bytes_downloaded_.ever());
+    tr_variantDictAddInt(&top, TR_KEY_uploaded, tor->bytes_uploaded_.ever());
     tr_variantDictAddInt(&top, TR_KEY_max_peers, tor->peer_limit());
     tr_variantDictAddInt(&top, TR_KEY_bandwidth_priority, tor->get_priority());
     tr_variantDictAddBool(&top, TR_KEY_paused, !tor->start_when_stable);
@@ -914,7 +920,7 @@ void save(tr_torrent* tor)
     auto serde = tr_variant_serde::benc();
     if (!serde.to_file(top, tor->resume_file()))
     {
-        tor->set_local_error(fmt::format("Unable to save resume file: {:s}", serde.error_->message));
+        tor->error().set_local_error(fmt::format("Unable to save resume file: {:s}", serde.error_.message()));
     }
 }
 

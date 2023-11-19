@@ -1,4 +1,4 @@
-// This file Copyright © 2008-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -18,8 +18,11 @@
 #include "libtransmission/peer-io.h"
 #include "libtransmission/tr-assert.h"
 #include "libtransmission/utils.h" // tr_time_msec()
+#include "libtransmission/values.h"
 
-tr_bytes_per_second_t tr_bandwidth::get_speed_bytes_per_second(RateControl& r, unsigned int interval_msec, uint64_t now)
+using namespace libtransmission::Values;
+
+Speed tr_bandwidth::get_speed(RateControl& r, unsigned int interval_msec, uint64_t now)
 {
     if (now == 0)
     {
@@ -46,7 +49,7 @@ tr_bytes_per_second_t tr_bandwidth::get_speed_bytes_per_second(RateControl& r, u
             }
         }
 
-        r.cache_val_ = static_cast<tr_bytes_per_second_t>(bytes * 1000U / interval_msec);
+        r.cache_val_ = Speed{ bytes * 1000U / interval_msec, Speed::Units::Byps };
         r.cache_time_ = now;
     }
 
@@ -146,8 +149,8 @@ void tr_bandwidth::allocate_bandwidth(
     {
         if (auto& bandwidth = band_[dir]; bandwidth.is_limited_)
         {
-            auto const next_pulse_speed = bandwidth.desired_speed_bps_;
-            bandwidth.bytes_left_ = next_pulse_speed * period_msec / 1000U;
+            auto const next_pulse_speed = bandwidth.desired_speed_;
+            bandwidth.bytes_left_ = next_pulse_speed.base_quantity() * period_msec / 1000U;
         }
     }
 
@@ -260,45 +263,18 @@ void tr_bandwidth::allocate(uint64_t period_msec)
 
 // ---
 
-size_t tr_bandwidth::clamp(uint64_t now, tr_direction const dir, size_t byte_count) const
+size_t tr_bandwidth::clamp(tr_direction const dir, size_t byte_count) const noexcept
 {
     TR_ASSERT(tr_isDirection(dir));
 
     if (this->band_[dir].is_limited_)
     {
         byte_count = std::min(byte_count, this->band_[dir].bytes_left_);
-
-        /* if we're getting close to exceeding the speed limit,
-         * clamp down harder on the bytes available */
-        if (byte_count > 0)
-        {
-            if (now == 0)
-            {
-                now = tr_time_msec();
-            }
-
-            auto const current = this->get_raw_speed_bytes_per_second(now, dir);
-            auto const desired = this->get_desired_speed_bytes_per_second(dir);
-            auto const r = desired >= 1 ? static_cast<double>(current) / desired : 0.0;
-
-            if (r > 1.0)
-            {
-                byte_count = 0; // none left
-            }
-            else if (r > 0.9)
-            {
-                byte_count -= (byte_count / 5U); // cap at 80%
-            }
-            else if (r > 0.8)
-            {
-                byte_count -= (byte_count / 10U); // cap at 90%
-            }
-        }
     }
 
     if (this->parent_ != nullptr && this->band_[dir].honor_parent_limits_ && byte_count > 0)
     {
-        byte_count = this->parent_->clamp(now, dir, byte_count);
+        byte_count = this->parent_->clamp(dir, byte_count);
     }
 
     return byte_count;
@@ -348,9 +324,9 @@ void tr_bandwidth::notify_bandwidth_consumed(tr_direction dir, size_t byte_count
 
 tr_bandwidth_limits tr_bandwidth::get_limits() const
 {
-    tr_bandwidth_limits limits;
-    limits.up_limit_KBps = tr_toSpeedKBps(this->get_desired_speed_bytes_per_second(TR_UP));
-    limits.down_limit_KBps = tr_toSpeedKBps(this->get_desired_speed_bytes_per_second(TR_DOWN));
+    auto limits = tr_bandwidth_limits{};
+    limits.up_limit = this->get_desired_speed(TR_UP);
+    limits.down_limit = this->get_desired_speed(TR_DOWN);
     limits.up_limited = this->is_limited(TR_UP);
     limits.down_limited = this->is_limited(TR_DOWN);
     return limits;
@@ -358,8 +334,8 @@ tr_bandwidth_limits tr_bandwidth::get_limits() const
 
 void tr_bandwidth::set_limits(tr_bandwidth_limits const& limits)
 {
-    this->set_desired_speed_bytes_per_second(TR_UP, tr_toSpeedBytes(limits.up_limit_KBps));
-    this->set_desired_speed_bytes_per_second(TR_DOWN, tr_toSpeedBytes(limits.down_limit_KBps));
+    this->set_desired_speed(TR_UP, limits.up_limit);
+    this->set_desired_speed(TR_DOWN, limits.down_limit);
     this->set_limited(TR_UP, limits.up_limited);
     this->set_limited(TR_DOWN, limits.down_limited);
 }

@@ -1,4 +1,4 @@
-// This file Copyright © 2021-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -99,6 +99,8 @@ public:
     // New fetch() tasks will be rejected, but already-running tasks
     // are left alone so that they can finish.
     void startShutdown(std::chrono::milliseconds /*deadline*/);
+
+    [[nodiscard]] bool is_idle() const noexcept;
 
     // If you want to give running tasks a chance to finish, call closeSoon()
     // before destroying the tr_web object. Deleting the object will cancel

@@ -1,4 +1,4 @@
-// This file Copyright © 2009-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -10,13 +10,13 @@
 #include <vector>
 
 #include <QCoreApplication>
-#include <QSet>
 #include <QString>
 #include <QVariant>
 
 #include <libtransmission/tr-macros.h>
 
 #include "Utils.h" // for std::hash<QString>
+#include "Typedefs.h"
 
 class FileTreeItem
 {
@@ -69,8 +69,8 @@ public:
 
     QVariant data(int column, int role) const;
     std::pair<int, int> update(QString const& name, bool want, int priority, uint64_t have, bool update_fields);
-    void setSubtreeWanted(bool, QSet<int>& file_ids);
-    void setSubtreePriority(int priority, QSet<int>& file_ids);
+    void setSubtreeWanted(bool wanted, file_indices_t& setme_changed_ids);
+    void setSubtreePriority(int priority, file_indices_t& setme_changed_ids);
 
     [[nodiscard]] constexpr auto fileIndex() const noexcept
     {

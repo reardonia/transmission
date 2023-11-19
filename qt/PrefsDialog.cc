@@ -1,4 +1,4 @@
-// This file Copyright © 2009-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -36,9 +36,7 @@
 #include "Session.h"
 #include "Utils.h"
 
-/***
-****
-***/
+// ---
 
 namespace
 {
@@ -370,9 +368,9 @@ void PrefsDialog::altSpeedDaysEdited(int i)
 
 void PrefsDialog::initSpeedTab()
 {
-    QString const speed_unit_str = Formatter::get().unitStr(Formatter::get().SPEED, Formatter::get().KB);
-    auto const suffix = QStringLiteral(" %1").arg(speed_unit_str);
-    QLocale const locale;
+    auto const suffix = QStringLiteral(" %1").arg(Speed::display_name(Speed::Units::KByps));
+
+    auto const locale = QLocale{};
 
     ui_.uploadSpeedLimitSpin->setSuffix(suffix);
     ui_.downloadSpeedLimitSpin->setSuffix(suffix);

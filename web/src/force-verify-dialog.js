@@ -1,4 +1,4 @@
-/* @license This file Copyright © 2020-2023 Mnemosyne LLC.
+/* @license This file Copyright © Mnemosyne LLC.
    It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
    or any future license endorsed by Mnemosyne LLC.
    License text can be found in the licenses/ folder. */
@@ -58,16 +58,12 @@ export class ForceVerifyDialog extends EventTarget {
   }
 
   static _createMessage(options) {
-    let heading = null;
-    let message = null;
     const { torrents } = options;
-    if (torrents.length === 1) {
-      heading = `Force verify local data of ${torrents[0].getName()}?`;
-      message = `This torrent's progress will be rechecked without any safety checks. Are you sure?`;
-    } else {
-      heading = `Force verify local data of ${torrents.length} transfers?`;
-      message = `These torrents' progress will be rechecked without any safety checks. Are you sure?`;
-    }
+    const heading =
+      torrents.length === 1
+        ? `Force verify local data of ${torrents[0].getName()}?`
+        : `Force verify local data of ${torrents.length} transfers?`;
+    const message = `Missing files will be re-downloaded, use the non-forced verify function if you'd like to check for missing files.`;
     return { heading, message };
   }
 }

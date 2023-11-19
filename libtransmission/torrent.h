@@ -1,4 +1,4 @@
-// This file Copyright © 2009-2023 Mnemosyne LLC.
+// This file Copyright © Mnemosyne LLC.
 // It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
@@ -10,7 +10,9 @@
 #endif
 
 #include <cstddef> // size_t
+#include <cstdint> // uint64_t, uint16_t
 #include <ctime>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,19 +30,19 @@
 #include "libtransmission/crypto-utils.h"
 #include "libtransmission/file-piece-map.h"
 #include "libtransmission/interned-string.h"
-#include "libtransmission/observable.h"
 #include "libtransmission/log.h"
+#include "libtransmission/observable.h"
 #include "libtransmission/session.h"
+#include "libtransmission/torrent-files.h"
 #include "libtransmission/torrent-magnet.h"
 #include "libtransmission/torrent-metainfo.h"
 #include "libtransmission/tr-assert.h"
 #include "libtransmission/tr-macros.h"
+#include "libtransmission/verify.h"
 
+struct tr_ctor;
 class tr_swarm;
 struct tr_error;
-struct tr_magnet_info;
-struct tr_metainfo_parsed;
-struct tr_session;
 struct tr_torrent;
 struct tr_torrent_announcer;
 
@@ -52,7 +54,7 @@ void tr_ctorInitTorrentPriorities(tr_ctor const* ctor, tr_torrent* tor);
 
 void tr_ctorInitTorrentWanted(tr_ctor const* ctor, tr_torrent* tor);
 
-bool tr_ctorSaveContents(tr_ctor const* ctor, std::string_view filename, tr_error** error);
+bool tr_ctorSaveContents(tr_ctor const* ctor, std::string_view filename, tr_error* error);
 
 tr_session* tr_ctorGetSession(tr_ctor const* ctor);
 
@@ -61,8 +63,6 @@ bool tr_ctorGetIncompleteDir(tr_ctor const* ctor, char const** setme_incomplete_
 // ---
 
 void tr_torrentChangeMyPort(tr_torrent* tor);
-
-[[nodiscard]] tr_torrent* tr_torrentFindFromObfuscatedHash(tr_session* session, tr_sha1_digest_t const& hash);
 
 bool tr_torrentReqIsValid(tr_torrent const* tor, tr_piece_index_t index, uint32_t offset, uint32_t length);
 
@@ -73,28 +73,88 @@ void tr_torrentCheckSeedLimit(tr_torrent* tor);
 /** save a torrent's .resume file if it's changed since the last time it was saved */
 void tr_torrentSave(tr_torrent* tor);
 
-enum tr_verify_state : uint8_t
-{
-    TR_VERIFY_NONE,
-    TR_VERIFY_WAIT,
-    TR_VERIFY_NOW
-};
-
 /** @brief Torrent object */
 struct tr_torrent final : public tr_completion::torrent_view
 {
+    using Speed = libtransmission::Values::Speed;
+
+    class CumulativeCount
+    {
+    public:
+        [[nodiscard]] constexpr auto start_new_session() noexcept
+        {
+            prev_ += cur_;
+            cur_ = {};
+        }
+
+        [[nodiscard]] constexpr auto during_this_session() const noexcept
+        {
+            return cur_;
+        }
+
+        [[nodiscard]] constexpr auto ever() const noexcept
+        {
+            return cur_ + prev_;
+        }
+
+        constexpr auto& operator+=(uint64_t count) noexcept
+        {
+            cur_ += count;
+            return *this;
+        }
+
+        constexpr void reduce(uint64_t count) // subtract w/underflow guard
+        {
+            cur_ = cur_ >= count ? cur_ - count : 0U;
+        }
+
+        constexpr void set_prev(uint64_t count) noexcept
+        {
+            prev_ = count;
+        }
+
+    private:
+        uint64_t prev_ = {};
+        uint64_t cur_ = {};
+    };
+
 public:
+    using labels_t = std::vector<tr_interned_string>;
+
+    using VerifyDoneCallback = std::function<void(tr_torrent*)>;
+
+    class VerifyMediator : public tr_verify_worker::Mediator
+    {
+    public:
+        explicit VerifyMediator(tr_torrent* const tor)
+            : tor_{ tor }
+        {
+        }
+
+        ~VerifyMediator() override = default;
+
+        [[nodiscard]] tr_torrent_metainfo const& metainfo() const override;
+        [[nodiscard]] std::optional<std::string> find_file(tr_file_index_t file_index) const override;
+
+        void on_verify_queued() override;
+        void on_verify_started() override;
+        void on_piece_checked(tr_piece_index_t piece, bool has_piece) override;
+        void on_verify_done(bool aborted) override;
+
+    private:
+        tr_torrent* const tor_;
+        std::optional<time_t> time_started_;
+    };
+
+    // ---
+
     explicit tr_torrent(tr_torrent_metainfo&& tm)
         : metainfo_{ std::move(tm) }
         , completion{ this, &this->metainfo_.block_info() }
     {
     }
 
-    void set_location(
-        std::string_view location,
-        bool move_from_old_path,
-        double volatile* setme_progress,
-        int volatile* setme_state);
+    void set_location(std::string_view location, bool move_from_old_path, int volatile* setme_state);
 
     void rename_path(
         std::string_view oldpath,
@@ -131,9 +191,9 @@ public:
         return bandwidth_;
     }
 
-    constexpr void set_speed_limit_bps(tr_direction dir, tr_bytes_per_second_t bytes_per_second)
+    constexpr void set_speed_limit(tr_direction dir, Speed limit)
     {
-        if (bandwidth().set_desired_speed_bytes_per_second(dir, bytes_per_second))
+        if (bandwidth().set_desired_speed(dir, limit))
         {
             set_dirty();
         }
@@ -147,9 +207,9 @@ public:
         }
     }
 
-    [[nodiscard]] constexpr auto speed_limit_bps(tr_direction dir) const
+    [[nodiscard]] constexpr auto speed_limit(tr_direction dir) const
     {
-        return bandwidth().get_desired_speed_bytes_per_second(dir);
+        return bandwidth().get_desired_speed(dir);
     }
 
     [[nodiscard]] constexpr auto uses_session_limits() const noexcept
@@ -306,9 +366,9 @@ public:
         return fpm_.piece_span(file);
     }
 
-    [[nodiscard]] auto file_offset(tr_block_info::Location loc) const
+    [[nodiscard]] auto file_offset(tr_block_info::Location loc, bool include_empty_files) const
     {
-        return fpm_.file_offset(loc.byte);
+        return fpm_.file_offset(loc.byte, include_empty_files);
     }
 
     [[nodiscard]] auto byte_span(tr_file_index_t file) const
@@ -529,27 +589,32 @@ public:
 
     /// METAINFO - PIECE CHECKSUMS
 
-    [[nodiscard]] TR_CONSTEXPR20 bool is_piece_checked(tr_piece_index_t piece) const
-    {
-        return checked_pieces_.test(piece);
-    }
-
-    [[nodiscard]] bool check_piece(tr_piece_index_t piece);
-
     [[nodiscard]] bool ensure_piece_is_checked(tr_piece_index_t piece);
 
     void init_checked_pieces(tr_bitfield const& checked, time_t const* mtimes /*fileCount()*/);
 
     ///
 
-    [[nodiscard]] constexpr auto is_queued() const noexcept
-    {
-        return this->is_queued_;
-    }
+    [[nodiscard]] tr_stat stats() const;
 
     [[nodiscard]] constexpr auto queue_direction() const noexcept
     {
-        return this->is_done() ? TR_UP : TR_DOWN;
+        return is_done() ? TR_UP : TR_DOWN;
+    }
+
+    [[nodiscard]] constexpr auto is_queued(tr_direction const dir) const noexcept
+    {
+        return is_queued_ && dir == queue_direction();
+    }
+
+    void set_is_queued(bool queued = true) noexcept
+    {
+        if (is_queued_ != queued)
+        {
+            is_queued_ = queued;
+            mark_changed();
+            set_dirty();
+        }
     }
 
     [[nodiscard]] constexpr auto allows_pex() const noexcept
@@ -577,90 +642,65 @@ public:
         return this->is_piece_transfer_allowed(TR_CLIENT_TO_PEER);
     }
 
-    void set_local_error(std::string_view errmsg)
-    {
-        this->error = TR_STAT_LOCAL_ERROR;
-        this->error_announce_url = TR_KEY_NONE;
-        this->error_string = errmsg;
-    }
-
     void set_download_dir(std::string_view path, bool is_new_torrent = false);
 
     void refresh_current_dir();
-
-    void set_verify_state(tr_verify_state state);
-
-    [[nodiscard]] constexpr auto verify_state() const noexcept
-    {
-        return verify_state_;
-    }
-
-    constexpr void set_verify_progress(float f) noexcept
-    {
-        verify_progress_ = f;
-    }
-
-    [[nodiscard]] constexpr std::optional<float> verify_progress() const noexcept
-    {
-        if (verify_state_ == TR_VERIFY_NOW)
-        {
-            return verify_progress_;
-        }
-
-        return {};
-    }
 
     [[nodiscard]] constexpr auto id() const noexcept
     {
         return unique_id_;
     }
 
-    constexpr void set_date_active(time_t t) noexcept
+    void init_id(tr_torrent_id_t id)
     {
-        this->activityDate = t;
+        TR_ASSERT(unique_id_ == tr_torrent_id_t{});
+        TR_ASSERT(id != tr_torrent_id_t{});
+        unique_id_ = id;
+    }
 
-        if (this->anyDate < t)
-        {
-            this->anyDate = t;
-        }
+    constexpr void set_date_active(time_t when) noexcept
+    {
+        this->activityDate = when;
+
+        bump_date_changed(when);
     }
 
     [[nodiscard]] constexpr auto activity() const noexcept
     {
-        bool const is_seed = this->is_done();
-
-        if (this->verify_state() == TR_VERIFY_NOW)
+        if (verify_state_ == VerifyState::Active)
         {
             return TR_STATUS_CHECK;
         }
 
-        if (this->verify_state() == TR_VERIFY_WAIT)
+        if (verify_state_ == VerifyState::Queued)
         {
             return TR_STATUS_CHECK_WAIT;
         }
 
-        if (this->is_running())
+        if (is_running())
         {
-            return is_seed ? TR_STATUS_SEED : TR_STATUS_DOWNLOAD;
+            return is_done() ? TR_STATUS_SEED : TR_STATUS_DOWNLOAD;
         }
 
-        if (this->is_queued())
+        if (is_queued(TR_UP) && session->queueEnabled(TR_UP))
         {
-            if (is_seed && this->session->queueEnabled(TR_UP))
-            {
-                return TR_STATUS_SEED_WAIT;
-            }
+            return TR_STATUS_SEED_WAIT;
+        }
 
-            if (!is_seed && this->session->queueEnabled(TR_DOWN))
-            {
-                return TR_STATUS_DOWNLOAD_WAIT;
-            }
+        if (is_queued(TR_DOWN) && session->queueEnabled(TR_DOWN))
+        {
+            return TR_STATUS_DOWNLOAD_WAIT;
         }
 
         return TR_STATUS_STOPPED;
     }
 
-    void setLabels(std::vector<tr_quark> const& new_labels);
+    [[nodiscard]] constexpr auto const& labels() const noexcept
+    {
+        return labels_;
+    }
+
+    void set_labels(labels_t const& new_labels);
 
     /** Return the mime-type (e.g. "audio/x-flac") that matches more of the
         torrent's content than any other mime-type. */
@@ -686,6 +726,11 @@ public:
         return is_stopping_;
     }
 
+    constexpr void stop_soon() noexcept
+    {
+        is_stopping_ = true;
+    }
+
     [[nodiscard]] constexpr auto is_dirty() const noexcept
     {
         return is_dirty_;
@@ -698,6 +743,11 @@ public:
 
     void mark_edited();
     void mark_changed();
+
+    [[nodiscard]] constexpr auto has_changed_since(time_t when) const noexcept
+    {
+        return changed_date_ > when;
+    }
 
     void set_bandwidth_group(std::string_view group_name) noexcept;
 
@@ -746,6 +796,22 @@ public:
     [[nodiscard]] constexpr auto idle_limit_minutes() const noexcept
     {
         return idle_limit_minutes_;
+    }
+
+    [[nodiscard]] constexpr std::optional<size_t> idle_seconds(time_t now) const noexcept
+    {
+        auto const activity = this->activity();
+
+        if (activity == TR_STATUS_DOWNLOAD || activity == TR_STATUS_SEED)
+        {
+            if (auto const latest = std::max(startDate, activityDate); latest != 0)
+            {
+                TR_ASSERT(now >= latest);
+                return now - latest;
+            }
+        }
+
+        return {};
     }
 
     [[nodiscard]] constexpr std::optional<size_t> idle_seconds_left(time_t now) const noexcept
@@ -891,6 +957,23 @@ public:
         session->announcer_->resetTorrent(this);
     }
 
+    [[nodiscard]] constexpr auto& error() noexcept
+    {
+        return error_;
+    }
+
+    [[nodiscard]] constexpr auto const& error() const noexcept
+    {
+        return error_;
+    }
+
+    void init(tr_ctor const* ctor);
+
+    [[nodiscard]] TR_CONSTEXPR20 auto obfuscated_hash_equals(tr_sha1_digest_t const& test) const noexcept
+    {
+        return obfuscated_hash_ == test;
+    }
+
     tr_torrent_metainfo metainfo_;
 
     tr_bandwidth bandwidth_;
@@ -904,8 +987,6 @@ public:
     libtransmission::SimpleObservable<tr_torrent*> stopped_;
     libtransmission::SimpleObservable<tr_torrent*> swarm_is_all_seeds_;
 
-    tr_stat stats = {};
-
     // TODO(ckerr): make private once some of torrent.cc's `tr_torrentFoo()` methods are member functions
     tr_completion completion;
 
@@ -915,18 +996,9 @@ public:
     tr_bitfield checked_pieces_ = tr_bitfield{ 0 };
 
     tr_file_piece_map fpm_ = tr_file_piece_map{ metainfo_ };
-    tr_files_wanted files_wanted_{ &fpm_ };
-    tr_file_priorities file_priorities_{ &fpm_ };
-
-    std::string error_string;
-
-    using labels_t = std::vector<tr_quark>;
-    labels_t labels;
 
     // when Transmission thinks the torrent's files were last changed
     std::vector<time_t> file_mtimes_;
-
-    tr_interned_string error_announce_url;
 
     // Where the files are when the torrent is complete.
     tr_interned_string download_dir_;
@@ -939,7 +1011,9 @@ public:
     // Will equal either download_dir or incomplete_dir
     tr_interned_string current_dir_;
 
-    tr_sha1_digest_t obfuscated_hash = {};
+    CumulativeCount bytes_corrupt_;
+    CumulativeCount bytes_downloaded_;
+    CumulativeCount bytes_uploaded_;
 
     /* Used when the torrent has been created with a magnet link
      * and we're in the process of downloading the metainfo from
@@ -956,7 +1030,6 @@ public:
 
     time_t activityDate = 0;
     time_t addedDate = 0;
-    time_t anyDate = 0;
     time_t doneDate = 0;
     time_t editDate = 0;
     time_t startDate = 0;
@@ -964,18 +1037,7 @@ public:
     time_t seconds_downloading_before_current_start_ = 0;
     time_t seconds_seeding_before_current_start_ = 0;
 
-    uint64_t downloadedCur = 0;
-    uint64_t downloadedPrev = 0;
-    uint64_t uploadedCur = 0;
-    uint64_t uploadedPrev = 0;
-    uint64_t corruptCur = 0;
-    uint64_t corruptPrev = 0;
-
     size_t queuePosition = 0;
-
-    tr_torrent_id_t unique_id_ = 0;
-
-    tr_stat_errtype error = TR_STAT_OK;
 
     tr_completeness completeness = TR_LEECH;
 
@@ -983,31 +1045,81 @@ public:
 
     bool finished_seeding_by_idle_ = false;
 
-    bool is_deleting_ = false;
-    bool is_dirty_ = false;
-    bool is_queued_ = false;
     bool is_running_ = false;
-    bool is_stopping_ = false;
 
     // start the torrent after all the startup scaffolding is done,
     // e.g. fetching metadata from peers and/or verifying the torrent
     bool start_when_stable = false;
 
 private:
+    friend tr_file_view tr_torrentFile(tr_torrent const* tor, tr_file_index_t file);
     friend tr_stat const* tr_torrentStat(tr_torrent* tor);
+    friend tr_torrent* tr_torrentNew(tr_ctor* ctor, tr_torrent** setme_duplicate_of);
+    friend uint64_t tr_torrentGetBytesLeftToAllocate(tr_torrent const* tor);
+    friend void tr_torrentCheckSeedLimit(tr_torrent* tor);
+    friend void tr_torrentFreeInSessionThread(tr_torrent* tor);
+    friend void tr_torrentGotBlock(tr_torrent* tor, tr_block_index_t block);
+    friend void tr_torrentRemove(tr_torrent* tor, bool delete_flag, tr_fileFunc delete_func, void* user_data);
+    friend void tr_torrentStop(tr_torrent* tor);
+    friend void tr_torrentVerify(tr_torrent* tor, bool force);
+
+    enum class VerifyState : uint8_t
+    {
+        None,
+        Queued,
+        Active
+    };
+
+    // Tracks a torrent's error state, either local (e.g. file IO errors)
+    // or tracker errors (e.g. warnings returned by a tracker).
+    class Error
+    {
+    public:
+        [[nodiscard]] constexpr auto empty() const noexcept
+        {
+            return error_type_ == TR_STAT_OK;
+        }
+
+        [[nodiscard]] constexpr auto error_type() const noexcept
+        {
+            return error_type_;
+        }
+
+        [[nodiscard]] constexpr auto const& announce_url() const noexcept
+        {
+            return announce_url_;
+        }
+
+        [[nodiscard]] constexpr auto const& errmsg() const noexcept
+        {
+            return errmsg_;
+        }
+
+        void set_tracker_warning(tr_interned_string announce_url, std::string_view errmsg);
+        void set_tracker_error(tr_interned_string announce_url, std::string_view errmsg);
+        void set_local_error(std::string_view errmsg);
+
+        void clear() noexcept;
+        void clear_if_tracker() noexcept;
+
+    private:
+        tr_interned_string announce_url_; // the source for tracker errors/warnings
+        std::string errmsg_;
+        tr_stat_errtype error_type_ = TR_STAT_OK;
+    };
 
     // Helper class to smooth out speed estimates.
     // Used to prevent temporary speed changes from skewing the ETA too much.
     class SimpleSmoothedSpeed
     {
     public:
-        constexpr auto update(uint64_t time_msec, tr_bytes_per_second_t speed_byps)
+        constexpr auto update(uint64_t time_msec, Speed speed)
         {
             // If the old speed is too old, just replace it
             if (timestamp_msec_ + MaxAgeMSec <= time_msec)
             {
                 timestamp_msec_ = time_msec;
-                speed_byps_ = speed_byps;
+                speed_ = speed;
             }
 
             // To prevent the smoothing from being overwhelmed by frequent calls
@@ -1015,10 +1127,10 @@ private:
             else if (timestamp_msec_ + MinUpdateMSec <= time_msec)
             {
                 timestamp_msec_ = time_msec;
-                speed_byps_ = (speed_byps_ * 4U + speed_byps) / 5U;
+                speed_ = (speed_ * 4U + speed) / 5U;
             }
 
-            return speed_byps_;
+            return speed_;
         }
 
     private:
@@ -1026,8 +1138,15 @@ private:
         static auto constexpr MinUpdateMSec = 800U;
 
         uint64_t timestamp_msec_ = {};
-        tr_bytes_per_second_t speed_byps_ = {};
+        Speed speed_ = {};
     };
+
+    [[nodiscard]] TR_CONSTEXPR20 bool is_piece_checked(tr_piece_index_t piece) const
+    {
+        return checked_pieces_.test(piece);
+    }
+
+    [[nodiscard]] bool check_piece(tr_piece_index_t piece);
 
     [[nodiscard]] constexpr std::optional<uint16_t> effective_idle_limit_minutes() const noexcept
     {
@@ -1046,32 +1165,16 @@ private:
         return {};
     }
 
-    [[nodiscard]] constexpr std::optional<size_t> idle_seconds(time_t now) const noexcept
-    {
-        auto const activity = this->activity();
-
-        if (activity == TR_STATUS_DOWNLOAD || activity == TR_STATUS_SEED)
-        {
-            if (auto const latest = std::max(startDate, activityDate); latest != 0)
-            {
-                TR_ASSERT(now >= latest);
-                return now - latest;
-            }
-        }
-
-        return {};
-    }
-
     [[nodiscard]] constexpr bool is_piece_transfer_allowed(tr_direction direction) const noexcept
     {
-        if (uses_speed_limit(direction) && speed_limit_bps(direction) <= 0)
+        if (uses_speed_limit(direction) && speed_limit(direction).is_zero())
         {
             return false;
         }
 
         if (uses_session_limits())
         {
-            if (auto const limit = session->activeSpeedLimitBps(direction); limit && *limit == 0U)
+            if (auto const limit = session->active_speed_limit(direction); limit && limit->is_zero())
             {
                 return false;
             }
@@ -1094,9 +1197,46 @@ private:
         }
     }
 
+    constexpr void bump_date_changed(time_t when)
+    {
+        if (changed_date_ < when)
+        {
+            changed_date_ = when;
+        }
+    }
+
+    void set_verify_state(VerifyState state);
+
+    [[nodiscard]] constexpr std::optional<float> verify_progress() const noexcept
+    {
+        if (verify_state_ == VerifyState::Active)
+        {
+            return verify_progress_;
+        }
+
+        return {};
+    }
+
+    void on_metainfo_updated();
+
+    void stop_now();
+
+    tr_stat stats_ = {};
+
+    Error error_;
+
+    VerifyDoneCallback verify_done_callback_;
+
+    labels_t labels_;
+
     tr_interned_string bandwidth_group_;
 
-    SimpleSmoothedSpeed eta_speed_;
+    tr_sha1_digest_t obfuscated_hash_ = {};
+
+    mutable SimpleSmoothedSpeed eta_speed_;
+
+    tr_files_wanted files_wanted_{ &fpm_ };
+    tr_file_priorities file_priorities_{ &fpm_ };
 
     /* If the initiator of the connection receives a handshake in which the
      * peer_id does not match the expected peerid, then the initiator is
@@ -1107,18 +1247,27 @@ private:
      */
     tr_peer_id_t peer_id_ = tr_peerIdInit();
 
+    time_t changed_date_ = 0;
+
     float verify_progress_ = -1.0F;
     float seed_ratio_ = 0.0F;
 
     tr_announce_key_t announce_key_ = tr_rand_obj<tr_announce_key_t>();
 
+    tr_torrent_id_t unique_id_ = 0;
+
     tr_ratiolimit seed_ratio_mode_ = TR_RATIOLIMIT_GLOBAL;
 
     tr_idlelimit idle_limit_mode_ = TR_IDLELIMIT_GLOBAL;
 
-    tr_verify_state verify_state_ = TR_VERIFY_NONE;
+    VerifyState verify_state_ = VerifyState::None;
 
     uint16_t idle_limit_minutes_ = 0;
+
+    bool is_deleting_ = false;
+    bool is_dirty_ = false;
+    bool is_queued_ = false;
+    bool is_stopping_ = false;
 
     bool needs_completeness_check_ = true;
 
@@ -1132,21 +1281,20 @@ constexpr bool tr_isTorrent(tr_torrent const* tor)
     return tor != nullptr && tor->session != nullptr;
 }
 
-/**
- * Tell the `tr_torrent` that it's gotten a block
- */
+// Tell the `tr_torrent` that it's gotten a block
 void tr_torrentGotBlock(tr_torrent* tor, tr_block_index_t block);
 
 tr_torrent_metainfo tr_ctorStealMetainfo(tr_ctor* ctor);
 
-bool tr_ctorSetMetainfoFromFile(tr_ctor* ctor, std::string_view filename, tr_error** error = nullptr);
-bool tr_ctorSetMetainfoFromMagnetLink(tr_ctor* ctor, std::string_view magnet_link, tr_error** error = nullptr);
-void tr_ctorSetLabels(tr_ctor* ctor, tr_quark const* labels, size_t n_labels);
+bool tr_ctorSetMetainfoFromFile(tr_ctor* ctor, std::string_view filename, tr_error* error = nullptr);
+bool tr_ctorSetMetainfoFromMagnetLink(tr_ctor* ctor, std::string_view magnet_link, tr_error* error = nullptr);
+void tr_ctorSetLabels(tr_ctor* ctor, tr_torrent::labels_t&& labels);
 void tr_ctorSetBandwidthPriority(tr_ctor* ctor, tr_priority_t priority);
 tr_priority_t tr_ctorGetBandwidthPriority(tr_ctor const* ctor);
 tr_torrent::labels_t const& tr_ctorGetLabels(tr_ctor const* ctor);
 
-void tr_torrentOnVerifyDone(tr_torrent* tor, bool aborted);
+void tr_ctorSetVerifyDoneCallback(tr_ctor* ctor, tr_torrent::VerifyDoneCallback&& callback);
+tr_torrent::VerifyDoneCallback tr_ctorStealVerifyDoneCallback(tr_ctor* ctor);
 
 #define tr_logAddCriticalTor(tor, msg) tr_logAddCritical(msg, (tor)->name())
 #define tr_logAddErrorTor(tor, msg) tr_logAddError(msg, (tor)->name())
