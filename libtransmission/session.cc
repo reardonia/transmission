@@ -730,11 +730,6 @@ void tr_session::initImpl(init_data& data)
 
     setSettings(settings, true);
 
-    if (this->allowsLPD())
-    {
-        this->lpd_ = tr_lpd::create(lpd_mediator_, event_base());
-    }
-
 #ifdef WITH_UTP
     tr_utpInit(this);
 #endif
@@ -796,7 +791,9 @@ void tr_session::setSettings(tr_session_settings&& settings_in, bool force)
         setDefaultTrackers(val);
     }
 
+#ifdef WITH_UTP
     bool const utp_changed = new_settings.utp_enabled != old_settings.utp_enabled;
+#endif
 
     set_blocklist_enabled(new_settings.blocklist_enabled);
 
@@ -843,7 +840,11 @@ void tr_session::setSettings(tr_session_settings&& settings_in, bool force)
         port_forwarding_->local_port_changed();
     }
 
+#ifdef WITH_UTP
     if (!udp_core_ || force || port_changed || utp_changed)
+#else
+    if (!udp_core_ || force || port_changed)
+#endif
     {
         udp_core_ = std::make_unique<tr_session::tr_udp_core>(*this, udpPort());
     }
