@@ -1555,6 +1555,7 @@ bool tr_session::allowsUTP() const noexcept
 bool tr_sessionIsUTPEnabled([[maybe_unused]] tr_session const* session)
 {
     TR_ASSERT(session != nullptr);
+
 #ifdef WITH_UTP
     return session->allowsUTP();
 #else
@@ -1565,11 +1566,13 @@ bool tr_sessionIsUTPEnabled([[maybe_unused]] tr_session const* session)
 void tr_sessionSetUTPEnabled(tr_session* session, [[maybe_unused]] bool enabled)
 {
     TR_ASSERT(session != nullptr);
+
 #ifdef WITH_UTP
     if (enabled == session->allowsUTP())
     {
         return;
     }
+
     session->runInSessionThread(
         [session, enabled]()
         {
@@ -1578,7 +1581,8 @@ void tr_sessionSetUTPEnabled(tr_session* session, [[maybe_unused]] bool enabled)
             session->setSettings(std::move(settings), false);
         });
 #else
-    session->settings_.utp_enabled = false;
+    auto settings = session->settings_;
+    settings.utp_enabled = false;
 #endif
 }
 
