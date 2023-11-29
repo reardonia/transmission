@@ -1127,7 +1127,7 @@ public:
     std::unique_ptr<tr_udp_core> udp_core_;
 
     // monitors the "global pool" speeds
-    tr_bandwidth top_bandwidth_;
+    tr_bandwidth top_bandwidth_{ true };
 
 private:
     // depends-on: top_bandwidth_
@@ -1209,8 +1209,3 @@ public:
     std::unique_ptr<libtransmission::Timer> utp_timer;
 #endif
 };
-
-constexpr bool tr_isPriority(tr_priority_t p)
-{
-    return p == TR_PRI_LOW || p == TR_PRI_NORMAL || p == TR_PRI_HIGH;
-}

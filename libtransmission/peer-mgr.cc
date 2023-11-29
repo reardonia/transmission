@@ -487,7 +487,6 @@ public:
                 tor->bytes_uploaded_ += event.length;
                 tr_announcerAddBytes(tor, TR_ANN_UP, event.length);
                 tor->set_date_active(now);
-                tor->set_dirty();
                 tor->session->add_uploaded(event.length);
 
                 msgs->peer_info->set_latest_piece_data_time(now);
@@ -800,7 +799,6 @@ private:
     {
         tor->bytes_downloaded_ += sent_length;
         tor->set_date_active(now);
-        tor->set_dirty();
         tor->session->add_downloaded(sent_length);
     }
 
@@ -2362,6 +2360,10 @@ struct peer_candidate
 
     case TR_PRI_LOW:
         i = 2;
+        break;
+
+    default:
+        TR_ASSERT_MSG(false, "invalid priority");
         break;
     }
 

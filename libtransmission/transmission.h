@@ -589,9 +589,6 @@ void tr_sessionSetAntiBruteForceEnabled(tr_session* session, bool enabled);
 /** @brief Like `tr_torrentStart()`, but resumes right away regardless of the queues. */
 void tr_torrentStartNow(tr_torrent* tor);
 
-/** @brief DEPRECATED. Equivalent to `tr_torrentStart()`. Use that instead. */
-void tr_torrentStartMagnet(tr_torrent* tor);
-
 /** @brief Return the queued torrent's position in the queue it's in. [0...n) */
 size_t tr_torrentGetQueuePosition(tr_torrent const* tor);
 
@@ -1024,7 +1021,8 @@ enum : tr_priority_t
 {
     TR_PRI_LOW = -1,
     TR_PRI_NORMAL = 0, /* since Normal is 0, memset initializes nicely */
-    TR_PRI_HIGH = 1
+    TR_PRI_HIGH = 1,
+    TR_PRI_NONE
 };
 
 /**
