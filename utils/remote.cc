@@ -703,8 +703,6 @@ static void setGroup(tr_variant* args, std::string_view group)
     return files;
 }
 
-// clang-format off
-
 static auto constexpr FilesKeys = std::array<tr_quark, 4>{
     TR_KEY_files,
     TR_KEY_name,
@@ -712,7 +710,7 @@ static auto constexpr FilesKeys = std::array<tr_quark, 4>{
     TR_KEY_wanted,
 };
 
-static auto constexpr DetailsKeys = std::array<tr_quark, 52>{
+static auto constexpr DetailsKeys = std::array<tr_quark, 53>{
     TR_KEY_activityDate,
     TR_KEY_addedDate,
     TR_KEY_bandwidthPriority,
@@ -754,6 +752,7 @@ static auto constexpr DetailsKeys = std::array<tr_quark, 52>{
     TR_KEY_secondsSeeding,
     TR_KEY_seedRatioMode,
     TR_KEY_seedRatioLimit,
+    TR_KEY_sequentialDownload,
     TR_KEY_sizeWhenDone,
     TR_KEY_source,
     TR_KEY_startDate,
@@ -764,7 +763,7 @@ static auto constexpr DetailsKeys = std::array<tr_quark, 52>{
     TR_KEY_uploadLimited,
     TR_KEY_uploadRatio,
     TR_KEY_webseeds,
-    TR_KEY_webseedsSendingToUs
+    TR_KEY_webseedsSendingToUs,
 };
 
 static auto constexpr ListKeys = std::array<tr_quark, 15>{
@@ -782,10 +781,8 @@ static auto constexpr ListKeys = std::array<tr_quark, 15>{
     TR_KEY_rateUpload,
     TR_KEY_sizeWhenDone,
     TR_KEY_status,
-    TR_KEY_uploadRatio
+    TR_KEY_uploadRatio,
 };
-
-// clang-format on
 
 static size_t writeFunc(void* ptr, size_t size, size_t nmemb, void* vbuf)
 {
@@ -1448,8 +1445,8 @@ static void printTorrentList(tr_variant* top)
         double total_up = 0;
         double total_down = 0;
 
-        printf(
-            "%6s   %-4s  %9s  %-9s  %6s  %6s  %-5s  %-11s  %s\n",
+        fmt::print(
+            "{:>6s}   {:>5s}  {:>9s}  {:<9s}  {:>6s}  {:>6s}  {:<5s}  {:<11s}  {:<s}\n",
             "ID",
             "Done",
             "Have",
@@ -1507,11 +1504,11 @@ static void printTorrentList(tr_variant* top)
                 auto const eta_str = leftUntilDone != 0 || eta != -1 ? etaToString(eta) : "Done";
                 auto const error_mark = tr_variantDictFindInt(d, TR_KEY_error, &error) && error ? '*' : ' ';
                 auto const done_str = sizeWhenDone != 0 ?
-                    fmt::format(FMT_STRING("{:.0f}%"), (100.0 * (sizeWhenDone - leftUntilDone) / sizeWhenDone)) :
+                    strlpercent(100.0 * (sizeWhenDone - leftUntilDone) / sizeWhenDone) + '%' :
                     std::string{ "n/a" };
 
                 fmt::print(
-                    FMT_STRING("{:6d}{:c}  {:>4s}  {:>9s}  {:<9s}  {:6.1f}  {:6.1f}  {:>5s}  {:<11s}  {:s}\n"),
+                    FMT_STRING("{:>6d}{:c}  {:>5s}  {:>9s}  {:<9s}  {:6.1f}  {:6.1f}  {:>5s}  {:<11s}  {:<s}\n"),
                     torId,
                     error_mark,
                     done_str,
@@ -1530,7 +1527,7 @@ static void printTorrentList(tr_variant* top)
         }
 
         fmt::print(
-            FMT_STRING("Sum:           {:>9s}             {:6.1f}  {:6.1f}\n"),
+            FMT_STRING("Sum:            {:>9s}             {:6.1f}  {:6.1f}\n"),
             strlsize(total_size).c_str(),
             Speed{ total_up, Speed::Units::Byps }.count(Speed::Units::KByps),
             Speed{ total_down, Speed::Units::Byps }.count(Speed::Units::KByps));
