@@ -353,11 +353,10 @@ private:
     };
 
 public:
-    struct Settings : public libtransmission::Settings
+    struct Settings final : public libtransmission::Settings
     {
     public:
         Settings() = default;
-        virtual ~Settings() = default;
 
         explicit Settings(tr_variant const& src)
         {
