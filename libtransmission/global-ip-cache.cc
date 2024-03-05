@@ -208,6 +208,9 @@ bool tr_global_ip_cache::set_global_addr(tr_address_type type, tr_address const&
     if (type == addr.type && addr.is_global_unicast_address())
     {
         auto const lock = std::scoped_lock{ global_addr_mutex_[addr.type] };
+        // TRR
+        if (!(addr == global_addr_[addr.type]))
+            tr_logAddInfo(fmt::format("Cached global address {}", addr.display_name()));
         global_addr_[addr.type] = addr;
         tr_logAddTrace(fmt::format("Cached global address {}", addr.display_name()));
         return true;
@@ -273,8 +276,7 @@ void tr_global_ip_cache::update_source_addr(tr_address_type type) noexcept
     if (source_addr)
     {
         set_source_addr(*source_addr);
-        // TRR
-        tr_logAddInfo(fmt::format(
+        tr_logAddDebug(fmt::format(
             _("Successfully updated source {protocol} address to {ip}"),
             fmt::arg("protocol", protocol),
             fmt::arg("ip", source_addr->display_name())));
@@ -314,8 +316,7 @@ void tr_global_ip_cache::on_response_ip_query(tr_address_type type, tr_web::Fetc
             upkeep_timers_[type]->set_interval(UpkeepInterval);
 
 
-            // TRR
-            tr_logAddInfo(fmt::format(
+            tr_logAddDebug(fmt::format(
                 _("Successfully updated global {type} address to {ip} using {url}"),
                 fmt::arg("type", protocol),
                 fmt::arg("ip", addr->display_name()),
@@ -352,6 +353,9 @@ void tr_global_ip_cache::unset_global_addr(tr_address_type type) noexcept
 void tr_global_ip_cache::set_source_addr(tr_address const& addr) noexcept
 {
     auto const lock = std::scoped_lock{ source_addr_mutex_[addr.type] };
+    // TRR
+    if (!(addr == source_addr_[addr.type]))
+        tr_logAddInfo(fmt::format("Cached source address {}", addr.display_name()));
     source_addr_[addr.type] = addr;
     tr_logAddTrace(fmt::format("Cached source address {}", addr.display_name()));
 }
