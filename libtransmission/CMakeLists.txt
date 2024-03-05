@@ -227,6 +227,10 @@ target_compile_definitions(${TR_NAME}
     PUBLIC
         $<$<BOOL:${ENABLE_PSL}>:WITH_PSL>
         $<$<BOOL:${ENABLE_UTP}>:WITH_UTP>
+        $<$<STREQUAL:${CRYPTO_PKG},ccrypto>:WITH_CCRYPTO>
+        $<$<STREQUAL:${CRYPTO_PKG},mbedtls>:WITH_MBEDTLS>
+        $<$<STREQUAL:${CRYPTO_PKG},openssl>:WITH_OPENSSL>
+        $<$<STREQUAL:${CRYPTO_PKG},wolfssl>:WITH_WOLFSSL>
         $<$<NOT:$<BOOL:${ENABLE_NLS}>>:DISABLE_GETTEXT>)
 
 tr_target_compile_definitions_for_headers(${TR_NAME}
@@ -276,7 +280,6 @@ target_link_libraries(${TR_NAME}
     PRIVATE
         Threads::Threads
         deflate::deflate
-        transmission::crypto_impl
         CURL::libcurl
         FastFloat::fast_float
         $<$<BOOL:${ENABLE_PSL}>:psl::psl>
@@ -298,6 +301,7 @@ target_link_libraries(${TR_NAME}
         "$<$<BOOL:${APPLE}>:-framework Foundation>"
         "$<$<BOOL:${ANDROID}>:${log-lib}>"
     PUBLIC
+        transmission::crypto_impl
         fmt::fmt-header-only
         small::small
         libevent::event)
