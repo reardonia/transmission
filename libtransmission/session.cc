@@ -739,7 +739,7 @@ void tr_session::initImpl(init_data& data)
     setSettings(settings, true);
 
 #ifdef WITH_UTP
-    tr_utpInit(this);
+    tr_utp_init(this);
 #endif
 
     /* cleanup */
@@ -1419,7 +1419,7 @@ void tr_session::closeImplPart2(std::promise<void>* closed_promise, std::chrono:
     peer_mgr_.reset();
     openFiles().close_all();
 #ifdef WITH_UTP
-    tr_utpClose(this);
+    tr_utp_close(this);
 #endif
     this->udp_core_.reset();
 
