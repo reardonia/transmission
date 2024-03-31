@@ -77,7 +77,9 @@ public:
             return DH::randomPrivateKey();
         }
 
+#ifdef WITH_UTP
         virtual void set_utp_failed(tr_sha1_digest_t const& info_hash, tr_socket_address const& socket_address) = 0;
+#endif
     };
 
     tr_handshake(Mediator* mediator, std::shared_ptr<tr_peerIo> peer_io, tr_encryption_mode mode_in, DoneFunc on_done);

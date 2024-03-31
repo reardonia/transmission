@@ -225,7 +225,11 @@ std::optional<tr_sys_file_t> tr_open_files::get(
             return {};
         }
 
+//TRR
+/*
         tr_logAddDebug(fmt::format("Preallocated file '{}' ({}, size: {})", filename, type, file_size));
+*/
+        tr_logAddInfo(fmt::format("Preallocated file '{}' ({}, size: {})", filename, type, file_size));
     }
 
     // If the file already exists and it's too large, truncate it.

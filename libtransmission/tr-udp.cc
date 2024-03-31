@@ -95,23 +95,22 @@ void event_callback(evutil_socket_t s, [[maybe_unused]] short type, void* vsessi
     auto fromlen = socklen_t{ sizeof(from) };
     auto* const from_sa = reinterpret_cast<sockaddr*>(&from);
     auto* const session = static_cast<tr_session*>(vsession);
-#ifdef WITH_UTP
     auto got_utp_packet = false;
-#endif
 
     for (;;)
     {
         auto const n_read = recvfrom(s, reinterpret_cast<char*>(std::data(buf)), std::size(buf) - 1, 0, from_sa, &fromlen);
         if (n_read <= 0)
         {
-#ifdef WITH_UTP
             if (got_utp_packet)
             {
+#ifdef WITH_UTP
                 // To reduce protocol overhead, we wait until we've read all UDP packets
                 // we can, then send one ACK for each µTP socket that received packet(s).
                 tr_utp_issue_deferred_acks(session);
-            }
 #endif
+            }
+
             return;
         }
 

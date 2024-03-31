@@ -1576,16 +1576,16 @@ bool tr_sessionIsUTPEnabled([[maybe_unused]] tr_session const* session)
 #endif
 }
 
-void tr_sessionSetUTPEnabled(tr_session* session, [[maybe_unused]] bool enabled)
+void tr_sessionSetUTPEnabled(tr_session* session, bool enabled)
 {
     TR_ASSERT(session != nullptr);
 
-#ifdef WITH_UTP
     if (enabled == session->allowsUTP())
     {
         return;
     }
 
+#ifdef WITH_UTP
     session->run_in_session_thread(
         [session, enabled]()
         {

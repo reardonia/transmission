@@ -417,7 +417,11 @@ TEST_F(SettingsTest, canLoadPreferredTransport)
 
     auto settings = std::make_unique<tr_session::Settings>();
     auto const default_value = settings->preferred_transport;
+#ifdef WITH_UTP
     ASSERT_NE(ExpectedValue, default_value);
+#else
+    ASSERT_EQ(ExpectedValue, default_value);
+#endif
 
     auto var = tr_variant{};
     tr_variantInitDict(&var, 1);
@@ -440,7 +444,11 @@ TEST_F(SettingsTest, canSavePreferredTransport)
 
     auto settings = tr_session::Settings{};
     auto const default_value = settings.preferred_transport;
+#ifdef WITH_UTP
     ASSERT_NE(ExpectedValue, default_value);
+#else
+    ASSERT_EQ(ExpectedValue, default_value);
+#endif
 
     auto var = tr_variant{};
     tr_variantInitDict(&var, 100);

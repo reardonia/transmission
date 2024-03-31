@@ -280,7 +280,9 @@ tr_variant save_preallocation_mode(tr_open_files::Preallocation const& val)
 // ---
 
 auto constexpr PreferredTransportKeys = Lookup<tr_preferred_transport, TR_NUM_PREFERRED_TRANSPORT>{ {
+#ifdef WITH_UTP
     { "utp", TR_PREFER_UTP },
+#endif
     { "tcp", TR_PREFER_TCP },
 } };
 

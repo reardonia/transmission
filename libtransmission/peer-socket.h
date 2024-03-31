@@ -79,10 +79,12 @@ public:
         return socket_address_.display_name();
     }
 
+#ifdef WITH_UTP
     [[nodiscard]] constexpr auto is_utp() const noexcept
     {
         return type_ == Type::UTP;
     }
+#endif
 
     [[nodiscard]] constexpr auto is_tcp() const noexcept
     {
@@ -139,7 +141,9 @@ private:
     {
         None,
         TCP,
+#ifdef WITH_UTP
         UTP
+#endif
     };
 
     tr_socket_address socket_address_;

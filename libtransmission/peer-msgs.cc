@@ -310,7 +310,11 @@ public:
         tr_interned_string client,
         tr_peer_callback_bt callback,
         void* callback_data)
+#ifdef WITH_UTP
         : tr_peerMsgs{ torrent_in, peer_info_in, client, io_in->is_encrypted(), io_in->is_incoming(), io_in->is_utp() }
+#else
+        : tr_peerMsgs{ torrent_in, peer_info_in, client, io_in->is_encrypted(), io_in->is_incoming(), false }
+#endif
         , tor_{ torrent_in }
         , io_{ std::move(io_in) }
         , have_{ torrent_in.piece_count() }

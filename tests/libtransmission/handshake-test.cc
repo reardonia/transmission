@@ -116,9 +116,11 @@ public:
             return private_key_;
         }
 
+#ifdef WITH_UTP
         void set_utp_failed(tr_sha1_digest_t const& /*info_hash*/, tr_socket_address const& /*socket_address*/) override
         {
         }
+#endif
 
         void setPrivateKeyFromBase64(std::string_view b64)
         {

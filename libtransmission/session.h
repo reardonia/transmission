@@ -388,7 +388,11 @@ public:
         bool speed_limit_down_enabled = false;
         bool speed_limit_up_enabled = false;
         bool tcp_enabled = true;
+#ifdef WITH_UTP
         bool utp_enabled = true;
+#else
+        bool utp_enabled = false;
+#endif
         double ratio_limit = 2.0;
         size_t cache_size_mbytes = 4U;
         size_t download_queue_size = 5U;
@@ -419,7 +423,11 @@ public:
         tr_port peer_port_random_high = tr_port::from_host(65535);
         tr_port peer_port_random_low = tr_port::from_host(49152);
         tr_port peer_port = tr_port::from_host(TR_DEFAULT_PEER_PORT);
+#ifdef WITH_UTP
         tr_preferred_transport preferred_transport = TR_PREFER_UTP;
+#else
+        tr_preferred_transport preferred_transport = TR_PREFER_TCP;
+#endif
         tr_tos_t peer_socket_tos{ 0x04 };
         tr_verify_added_mode torrent_added_verify_mode = TR_VERIFY_ADDED_FAST;
 

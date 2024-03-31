@@ -133,10 +133,10 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing(
 
     auto peer_io = tr_peerIo::create(session, parent, &info_hash, false, is_seed);
     auto const func = small::max_size_map<preferred_key_t, std::function<bool()>, TR_NUM_PREFERRED_TRANSPORT>{
+#ifdef WITH_UTP
         { TR_PREFER_UTP,
           [&]()
           {
-#ifdef WITH_UTP
               if (utp)
               {
                   auto* const sock = utp_create_socket(session->utp_context);
@@ -149,9 +149,9 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing(
                       return true;
                   }
               }
-#endif
               return false;
           } },
+#endif
         { TR_PREFER_TCP,
           [&]()
           {
@@ -247,12 +247,12 @@ bool tr_peerIo::reconnect()
         return false;
     }
 
-    socket_ = tr_netOpenPeerSocket(session_, socket_address(), is_seed());
-
-    if (!socket_.is_tcp())
+    auto sock = tr_netOpenPeerSocket(session_, socket_address(), is_seed());
+    if (!sock.is_tcp())
     {
         return false;
     }
+    socket_ = std::move(sock);
 
     this->event_read_.reset(event_new(session_->event_base(), socket_.handle.tcp, EV_READ, event_read_cb, this));
     this->event_write_.reset(event_new(session_->event_base(), socket_.handle.tcp, EV_WRITE, event_write_cb, this));

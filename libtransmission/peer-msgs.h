@@ -82,8 +82,13 @@ public:
 
     [[nodiscard]] constexpr auto is_utp_connection() const noexcept
     {
+#ifdef WITH_UTP
         return connection_is_utp_;
+#else
+        return false;
+#endif
     }
+
 
     [[nodiscard]] constexpr auto const& user_agent() const noexcept
     {

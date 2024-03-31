@@ -115,7 +115,9 @@ public:
         return session_.allowsTCP();
     }
 
+#ifdef WITH_UTP
     void set_utp_failed(tr_sha1_digest_t const& info_hash, tr_socket_address const& socket_address) override;
+#endif
 
     [[nodiscard]] libtransmission::TimerMaker& timer_maker() override
     {
@@ -1365,10 +1367,12 @@ void create_bit_torrent_peer(tr_torrent& tor, std::shared_ptr<tr_peerIo> io, tr_
     }
 
     // If we're connected via µTP, then we know the peer supports µTP...
+#ifdef WITH_UTP
     if (result.io->is_utp())
     {
         info->set_utp_supported();
     }
+#endif
 
     if (info->is_banned())
     {
@@ -1738,7 +1742,11 @@ namespace peer_stat_helpers
     stats.port = port.host();
     stats.from = peer->peer_info->from_first();
     stats.progress = peer->percent_done();
+#ifdef WITH_UTP
     stats.isUTP = peer->is_utp_connection();
+#else
+    stats.isUTP = false;
+#endif
     stats.isEncrypted = peer->is_encrypted();
     stats.rateToPeer_KBps = peer->get_piece_speed(now_msec, TR_CLIENT_TO_PEER).count(Speed::Units::KByps);
     stats.rateToClient_KBps = peer->get_piece_speed(now_msec, TR_PEER_TO_CLIENT).count(Speed::Units::KByps);
@@ -1761,10 +1769,12 @@ namespace peer_stat_helpers
 
     char* pch = stats.flagStr;
 
+#ifdef WITH_UTP
     if (stats.isUTP)
     {
         *pch++ = 'T';
     }
+#endif
 
     if (peer->swarm->optimistic == peer)
     {
@@ -2656,6 +2666,7 @@ void tr_peerMgr::make_new_peer_connections()
     candidates.resize(std::size(candidates) - n_this_pass);
 }
 
+#ifdef WITH_UTP
 void HandshakeMediator::set_utp_failed(tr_sha1_digest_t const& info_hash, tr_socket_address const& socket_address)
 {
     if (auto* const tor = torrents_.get(info_hash); tor != nullptr)
@@ -2666,3 +2677,4 @@ void HandshakeMediator::set_utp_failed(tr_sha1_digest_t const& info_hash, tr_soc
         }
     }
 }
+#endif

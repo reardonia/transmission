@@ -52,7 +52,9 @@ enum ReadState
 enum tr_preferred_transport : uint8_t
 {
     // More preferred transports goes on top
+#ifdef WITH_UTP
     TR_PREFER_UTP,
+#endif
     TR_PREFER_TCP,
     TR_NUM_PREFERRED_TRANSPORT
 };
@@ -100,10 +102,12 @@ public:
 
     void set_socket(tr_peer_socket);
 
+#ifdef WITH_UTP
     [[nodiscard]] constexpr auto is_utp() const noexcept
     {
         return socket_.is_utp();
     }
+#endif
 
     void clear();
 
