@@ -756,6 +756,10 @@ void tr_torrent::stop_now()
     TR_ASSERT(session->am_in_session_thread());
     auto const lock = unique_lock();
 
+    auto const now = tr_time();
+    seconds_downloading_before_current_start_ = seconds_downloading(now);
+    seconds_seeding_before_current_start_ = seconds_seeding(now);
+
     is_running_ = false;
     is_stopping_ = false;
     mark_changed();
@@ -895,7 +899,7 @@ void tr_torrent::on_metainfo_completed()
         // Potentially, we are in `tr_torrent::init`,
         // and we don't want any file created before `tr_torrent::start`
         // so we Verify but we don't Create files.
-        session->queue_session_thread(tr_torrentVerify, this);
+        tr_torrentVerify(this);
     }
     else
     {
