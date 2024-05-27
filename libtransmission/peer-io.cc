@@ -121,8 +121,11 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing(
     tr_socket_address const& socket_address,
     tr_sha1_digest_t const& info_hash,
     bool is_seed,
-    [[maybe_unused]] bool utp)
+    bool utp)
 {
+#ifndef WITH_UTP
+    (void)utp;
+#endif
     using preferred_key_t = std::underlying_type_t<tr_preferred_transport>;
     auto const preferred = session->preferred_transport();
 
