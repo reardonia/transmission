@@ -440,27 +440,50 @@ namespace is_valid_for_peers_helpers
    and is covered under the same license as third-party/dht/dht.c. */
 [[nodiscard]] auto is_martian_addr(tr_address const& addr, tr_peer_from from)
 {
+/* TRR
     static auto constexpr Zeroes = std::array<unsigned char, 16>{};
     auto const loopback_allowed = from == TR_PEER_FROM_INCOMING || from == TR_PEER_FROM_LPD || from == TR_PEER_FROM_RESUME;
+*/
+    (void)from;
 
     switch (addr.type)
     {
     case TR_AF_INET:
         {
             auto const* const address = reinterpret_cast<unsigned char const*>(&addr.addr.addr4);
+/* TRR
             return address[0] == 0 || // 0.x.x.x
                 (!loopback_allowed && address[0] == 127) || // 127.x.x.x
                 (address[0] & 0xE0) == 0xE0; // multicast address
+*/
+            return
+                (address[0] == 0) ||                                            /* localnet */
+                (address[0] == 10) ||                                           /* private-use */
+                (address[0] == 100 && address[1] >= 64 && address[1] <= 127) || /* shared-address-space */
+                (address[0] == 127 ) ||                                         /* loopback */
+                (address[0] == 169 && address[1] == 254) ||                     /* link-local */
+                (address[0] == 172 && address[1] >= 16 && address[1] <= 31) ||  /* private-use */
+                (address[0] == 192 && address[1] == 168) ||                     /* private-use */
+                (address[0] >= 224)                                             /* multicast, reserved */
+                ;
         }
 
     case TR_AF_INET6:
         {
             auto const* const address = reinterpret_cast<unsigned char const*>(&addr.addr.addr6);
+/* TRR
             return address[0] == 0xFF || // multicast address
                 (std::memcmp(address, std::data(Zeroes), 15) == 0 &&
                  (address[15] == 0 || // ::
                   (!loopback_allowed && address[15] == 1)) // ::1
                 );
+*/
+            return
+                (address[0] & 0xE0) != 0x20 ||                                  /* 2000::/3 global unicast */
+                (address[0]==0x20 && address[1]==0x01 && address[2]<0x02) ||    /* 2001:0/23 Teredo, other IETF Assignments */
+                (address[0]==0x20 && address[1]==0x02) ||                       /* 6to4 */
+                (address[0]==0x3f && address[1]==0xfe)                          /* 3ffe::/16 legacy IETF Assignments */
+                ;
         }
 
     default:
