@@ -1565,13 +1565,14 @@ bool tr_session::allowsUTP() const noexcept
 #endif
 }
 
-bool tr_sessionIsUTPEnabled([[maybe_unused]] tr_session const* session)
+bool tr_sessionIsUTPEnabled(tr_session const* session)
 {
     TR_ASSERT(session != nullptr);
 
 #ifdef WITH_UTP
     return session->allowsUTP();
 #else
+    (void)session;
     return false;
 #endif
 }
