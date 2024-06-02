@@ -133,6 +133,8 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing(
 #ifndef WITH_UTP
     (void)utp;
 #endif
+// TRR
+    tr_logAddTrace("new_outgoing() ",socket_address.display_name());
     using preferred_key_t = std::underlying_type_t<tr_preferred_transport>;
     auto const preferred = session->preferred_transport();
 

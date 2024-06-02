@@ -44,14 +44,25 @@ constexpr int MaxRememberedPeers = 200;
 
 void savePeers(tr_variant* dict, tr_torrent const* tor)
 {
+    // TRR
+    // auto MY_PEX = tr_pex::tr_pex() ;
+    tr_logAddTraceTor(tor, fmt::format("note tr_pex sizeof({})",sizeof(struct tr_pex)));
+    tr_logAddTraceTor(tor, fmt::format("note tr_socket_address sizeof({})",sizeof(struct tr_socket_address)));
+    tr_logAddTraceTor(tor, fmt::format("note tr_address sizeof({})",sizeof(struct tr_address)));
+    tr_logAddTraceTor(tor, fmt::format("note tr_pex.socket_address offsetof({})",offsetof(struct tr_pex,socket_address)));
+    tr_logAddTraceTor(tor, fmt::format("note tr_pex.flags offsetof({})",offsetof(struct tr_pex,flags)));
+    tr_logAddTraceTor(tor, fmt::format("note tr_socket_address.port offsetof({})",offsetof(struct tr_socket_address,port_)));
+    // tr_logAddTraceTor(tor, fmt::format("note tr_socket_address.flagflag offsetof({})",offsetof(struct tr_socket_address,flagflag)));
     if (auto const pex = tr_peerMgrGetPeers(tor, TR_AF_INET, TR_PEERS_INTERESTING, MaxRememberedPeers); !std::empty(pex))
     {
         tr_variantDictAddRaw(dict, TR_KEY_peers2, std::data(pex), sizeof(tr_pex) * std::size(pex));
+        tr_logAddTraceTor(tor, fmt::format("Saved {} peers2",std::size(pex)));
     }
 
     if (auto const pex = tr_peerMgrGetPeers(tor, TR_AF_INET6, TR_PEERS_INTERESTING, MaxRememberedPeers); !std::empty(pex))
     {
         tr_variantDictAddRaw(dict, TR_KEY_peers2_6, std::data(pex), sizeof(tr_pex) * std::size(pex));
+        tr_logAddTraceTor(tor, fmt::format("Saved {} peers2-6",std::size(pex)));
     }
 }
 
