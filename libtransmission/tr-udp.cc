@@ -110,7 +110,6 @@ void event_callback(evutil_socket_t s, [[maybe_unused]] short type, void* vsessi
                 tr_utp_issue_deferred_acks(session);
 #endif
             }
-
             return;
         }
 
