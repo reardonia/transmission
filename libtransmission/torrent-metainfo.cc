@@ -238,9 +238,6 @@ struct MetainfoHandler final : public transmission::benc::BasicHandler<MaxBencDe
             tm_.is_v2_ = value == 2;
         }
         else if (
-// TRR
-            pathIs("codepage"sv) || //
-            pathIs(UidKey) || //
             pathIs(DurationKey) || //
             pathIs(EncodedRateKey) || //
             pathIs(HeightKey) || //
@@ -419,11 +416,7 @@ struct MetainfoHandler final : public transmission::benc::BasicHandler<MaxBencDe
             pathIs(PublisherUrlKey) || //
             pathIs(PublisherUrlUtf8Key) || //
             pathIs(TitleKey) || //
-// TRR
-            pathIs(InfoKey, "attr"sv) || //
-/*
             pathIs(UidKey) || //
-*/
             pathStartsWith(AzureusPrivatePropertiesKey) || //
             pathStartsWith(AzureusPropertiesKey) || //
             pathStartsWith(InfoKey, CollectionsKey) || //
