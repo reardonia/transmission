@@ -147,12 +147,11 @@ ReadState tr_handshake::read_vc(tr_peerIo* peer_io)
     for (; pad_b_recv_len_ <= PadbMaxlen; ++pad_b_recv_len_)
     {
         static auto constexpr Needlen = std::size(VC);
-// TRR
+        if (peer_io->read_buffer_size() < Needlen)
+        {
             tr_logAddTraceHand(
                 this,
                 fmt::format("in read_vc... need {}, read {}, have {}", Needlen, pad_b_recv_len_, peer_io->read_buffer_size()));
-        if (peer_io->read_buffer_size() < Needlen)
-        {
             return READ_LATER;
         }
 
@@ -328,15 +327,13 @@ ReadState tr_handshake::read_peer_id(tr_peerIo* peer_io)
 
     auto client = std::array<char, 128>{};
     tr_clientForId(std::data(client), std::size(client), peer_id);
-    // tr_logAddTraceHand(this, fmt::format("peer-id is '{}' ... isIncoming is {}", std::data(client), is_incoming()));
+    tr_logAddTraceHand(this, fmt::format("peer-id is '{}' ... isIncoming is {}", std::data(client), is_incoming()));
 
     // if we've somehow connected to ourselves, don't keep the connection
     auto const info_hash = peer_io_->torrent_hash();
     auto const info = mediator_->torrent(info_hash);
     auto const connected_to_self = info && info->client_peer_id == peer_id;
 
-    tr_logAddTraceHand(this, fmt::format("client is '{}' peer-id is '{}' client_peer_id is '{}' ... connected_to_self is {} ... isIncoming is {}", 
-			std::data(client), std::data(peer_id), std::data(info->client_peer_id), connected_to_self, is_incoming()));
     return done(!connected_to_self);
 }
 

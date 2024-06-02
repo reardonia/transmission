@@ -1402,13 +1402,6 @@ size_t tr_peerMgrAddPex(tr_torrent* tor, tr_peer_from from, tr_pex const* pex, s
 
     for (tr_pex const* const end = pex + n_pex; pex != end; ++pex)
     {
-// TRR
-        {
-            if (!pex->is_valid_for_peers(from))
-                tr_logAddWarnTor(tor, fmt::format("invalid peer {} from={}", pex->socket_address.display_name(), static_cast<uint8_t>(from)));
-            else
-                tr_logAddDebugTor(tor, fmt::format("valid peer {} from={}", pex->socket_address.display_name(), static_cast<uint8_t>(from)));
-        }
         if (tr_isPex(pex) && /* safeguard against corrupt data */
             !s->manager->blocklists_.contains(pex->socket_address.address()) && pex->is_valid_for_peers(from) &&
             from != TR_PEER_FROM_INCOMING && (from != TR_PEER_FROM_PEX || (pex->flags & ADDED_F_CONNECTABLE) != 0))
@@ -1813,16 +1806,6 @@ tr_peer_stat* tr_peerMgrPeerStats(tr_torrent const* tor, size_t* setme_count)
     auto* const ret = new tr_peer_stat[n];
 
     // TODO: re-implement as a callback solution (similar to tr_sessionSetCompletenessCallback) in case present call to run_in_session_thread is causing hangs when the peers info window is displayed.
-    /* TRR
-    auto const now = tr_time();
-    auto const now_msec = tr_time_msec();
-    std::transform(
-        std::begin(peers),
-        std::end(peers),
-        ret,
-        [&now, &now_msec](auto const* peer) { return peer_stat_helpers::get_peer_stats(peer, now, now_msec); });
-    */
-
     auto done_promise = std::promise<void>{};
     auto done_future = done_promise.get_future();
     tor->session->run_in_session_thread(
