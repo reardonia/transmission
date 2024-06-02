@@ -950,6 +950,9 @@ void tr_torrent::init(tr_ctor const& ctor)
 
     set_labels(ctor.labels());
 
+// TRR
+    tr_logAddInfoTor(this, "loading");
+
     session->addTorrent(this);
 
     TR_ASSERT(bytes_downloaded_.during_this_session() == 0U);
