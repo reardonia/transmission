@@ -97,6 +97,11 @@ void event_callback(evutil_socket_t s, [[maybe_unused]] short type, void* vsessi
     auto* const session = static_cast<tr_session*>(vsession);
     auto got_utp_packet = false;
 
+    auto const from_str = [from_sa]
+    {
+        return tr_socket_address::from_sockaddr(from_sa).value_or(tr_socket_address{}).display_name();
+    };
+
     for (;;)
     {
         auto const n_read = recvfrom(s, reinterpret_cast<char*>(std::data(buf)), std::size(buf) - 1, 0, from_sa, &fromlen);
@@ -132,7 +137,7 @@ void event_callback(evutil_socket_t s, [[maybe_unused]] short type, void* vsessi
         {
             if (!session->announcer_udp_->handle_message(std::data(buf), n_read, from_sa, fromlen))
             {
-                tr_logAddTrace("Couldn't parse UDP tracker packet.");
+                tr_logAddTrace(fmt::format("{} Couldn't parse UDP tracker packet.", from_str()));
             }
         }
 #ifdef WITH_UTP
@@ -144,7 +149,11 @@ void event_callback(evutil_socket_t s, [[maybe_unused]] short type, void* vsessi
             }
             else
             {
-                tr_logAddTrace("Unexpected UDP packet");
+                tr_logAddTrace(fmt::format(
+                    "{} Unexpected UDP packet... len {} [{}]",
+                    from_str(),
+                    n_read,
+                    tr_base64_encode({ reinterpret_cast<char const*>(std::data(buf)), static_cast<size_t>(n_read) })));
             }
         }
 #endif
