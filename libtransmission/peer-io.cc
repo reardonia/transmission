@@ -87,12 +87,12 @@ tr_peerIo::tr_peerIo(
     tr_session* session,
     tr_sha1_digest_t const* info_hash,
     bool is_incoming,
-    bool is_seed,
+    bool client_is_seed,
     tr_bandwidth* parent_bandwidth)
     : bandwidth_{ parent_bandwidth }
     , info_hash_{ info_hash != nullptr ? *info_hash : tr_sha1_digest_t{} }
     , session_{ session }
-    , is_seed_{ is_seed }
+    , client_is_seed_{ client_is_seed }
     , is_incoming_{ is_incoming }
 {
 }
@@ -127,7 +127,7 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing(
     tr_bandwidth* parent,
     tr_socket_address const& socket_address,
     tr_sha1_digest_t const& info_hash,
-    bool is_seed,
+    bool client_is_seed,
     bool utp)
 {
 #ifndef WITH_UTP
@@ -141,7 +141,7 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing(
     TR_ASSERT(socket_address.is_valid());
     TR_ASSERT(utp || session->allowsTCP());
 
-    auto peer_io = tr_peerIo::create(session, parent, &info_hash, false, is_seed);
+    auto peer_io = tr_peerIo::create(session, parent, &info_hash, false, client_is_seed);
     auto const func = small::max_size_map<preferred_key_t, std::function<bool()>, TR_NUM_PREFERRED_TRANSPORT>{
 #ifdef WITH_UTP
         { TR_PREFER_UTP,
@@ -167,7 +167,7 @@ std::shared_ptr<tr_peerIo> tr_peerIo::new_outgoing(
           {
               if (!peer_io->socket_.is_valid())
               {
-                  if (auto sock = tr_netOpenPeerSocket(session, socket_address, is_seed); sock.is_valid())
+                  if (auto sock = tr_netOpenPeerSocket(session, socket_address, client_is_seed); sock.is_valid())
                   {
                       peer_io->set_socket(std::move(sock));
                       return true;
@@ -259,7 +259,7 @@ bool tr_peerIo::reconnect()
         return false;
     }
 
-    auto sock = tr_netOpenPeerSocket(session_, socket_address(), is_seed());
+    auto sock = tr_netOpenPeerSocket(session_, socket_address(), client_is_seed());
     if (!sock.is_tcp())
     {
         return false;
