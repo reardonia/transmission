@@ -1185,7 +1185,6 @@ void tr_torrent::set_location_in_session_thread(std::string_view const path, boo
         {
             incomplete_dir_.clear();
             current_dir_ = download_dir();
-
         }
 // TRR
         tr_logAddInfoTor(this, fmt::format(move_from_old_path ? "moved '{path}'":"set-location '{path}'",
