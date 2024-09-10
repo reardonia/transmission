@@ -35,8 +35,11 @@ using namespace std::literals;
 static_assert(TR_AF_INET == 0);
 static_assert(TR_AF_INET6 == 1);
 
-auto constexpr IPQueryServices = std::array{ std::array{ "https://ip4.transmissionbt.com/"sv },
-                                             std::array{ "https://ip6.transmissionbt.com/"sv } };
+// TRR
+auto constexpr IPQueryServices = std::array{ std::array{ "https://icanhazip.com/"sv },
+                                             std::array{ "https://icanhazip.com/"sv } };
+//auto constexpr IPQueryServices = std::array{ std::array{ "https://ip4.transmissionbt.com/"sv },
+//                                             std::array{ "https://ip6.transmissionbt.com/"sv } };
 
 auto constexpr UpkeepInterval = 30min;
 auto constexpr RetryUpkeepInterval = 30s;
@@ -312,7 +315,6 @@ void tr_ip_cache::on_response_ip_query(tr_address_type type, tr_web::FetchRespon
         {
             success = true;
             upkeep_timers_[type]->set_interval(UpkeepInterval);
-
 
             tr_logAddDebug(fmt::format(
                 _("Successfully updated global {type} address to {ip} using {url}"),
