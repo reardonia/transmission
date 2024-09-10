@@ -68,7 +68,7 @@ struct tr_log_message
 
 // ---
 
-#define TR_LOG_MAX_QUEUE_LENGTH 10000
+#define TR_LOG_MAX_QUEUE_LENGTH 100000
 
 void tr_logSetQueueEnabled(bool is_enabled);
 

@@ -246,6 +246,8 @@ void tr_logAddMessage(char const* file, long line, tr_log_level level, std::stri
     // don't log the same warning ad infinitum.
     // at some point, it stops being useful.
     bool last_one = false;
+// TRR
+    /*
     if (level == TR_LOG_CRITICAL || level == TR_LOG_ERROR || level == TR_LOG_WARN)
     {
         static auto constexpr MaxRepeat = size_t{ 30 };
@@ -260,6 +262,7 @@ void tr_logAddMessage(char const* file, long line, tr_log_level level, std::stri
             return;
         }
     }
+    */
 
     // log the messages
     logAddImpl(filename, line, level, std::move(msg), name);
