@@ -225,7 +225,7 @@ std::optional<tr_sys_file_t> tr_open_files::get(
             return {};
         }
 
-//TRR
+// TRR
 /*
         tr_logAddDebug(fmt::format("Preallocated file '{}' ({}, size: {})", filename, type, file_size));
 */
