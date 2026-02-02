@@ -109,6 +109,11 @@ struct MetainfoHandler final : public tr::benc::BasicHandler<MaxBencDepth>
         }
         else if (pathIs(InfoKey))
         {
+            if (!std::empty(info_dict_begin_))
+            {
+                context.error.set(EINVAL, "more than one info_dict found");
+                return false;
+            }
             info_dict_begin_ = context.raw();
             tm_.info_dict_offset_ = context.tokenSpan().first;
         }
@@ -304,7 +309,8 @@ struct MetainfoHandler final : public tr::benc::BasicHandler<MaxBencDepth>
                 {
                     file_subpath_ += '/';
                 }
-                tr_torrent_files::sanitize_subpath(value, file_subpath_);
+                // BEP-3 says strings are UTF-8, so mask non-conformant path strings
+                tr_torrent_files::sanitize_subpath(tr_strv_convert_utf8(value), file_subpath_);
             }
             else if (current_key == AttrKey)
             {
@@ -506,11 +512,11 @@ private:
         // bittorrent 1.0 spec
         // https://www.bittorrent.org/beps/bep_0003.html
         //
-        // "There is also a key length or a key files, but not both or neither.
-        //
-        // "If length is present then the download represents a single file,
+        // "There is also a key 'length' or a key 'files', but not both or neither.
+        // If 'length' is present then the download represents a single file,
         // otherwise it represents a set of files which go in a directory structure.
-        // In the single file case, length maps to the length of the file in bytes.
+        // In the single file case, 'length' maps to the length of the file in bytes."
+        //
         if (tm_.file_count() == 0 && length_ != 0 && !std::empty(tm_.name_))
         {
             tm_.files_.add(tr_torrent_files::sanitize_subpath(tm_.name_), length_);
