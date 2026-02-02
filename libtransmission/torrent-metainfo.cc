@@ -109,6 +109,11 @@ struct MetainfoHandler final : public tr::benc::BasicHandler<MaxBencDepth>
         }
         else if (pathIs(InfoKey))
         {
+            if (!std::empty(info_dict_begin_))
+            {
+                context.error.set(EINVAL, "more than one info_dict found");
+                return false;
+            }
             info_dict_begin_ = context.raw();
             tm_.info_dict_offset_ = context.tokenSpan().first;
         }
