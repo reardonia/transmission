@@ -25,22 +25,6 @@
 using TorrentsTest = ::tr::test::TransmissionTest;
 using namespace std::literals;
 
-TEST_F(TorrentsTest, utf8Test)
-{
-    auto constexpr* const TorrentFile = LIBTRANSMISSION_TEST_ASSETS_DIR "/bad-utf8.torrent";
-    auto owned = std::vector<std::unique_ptr<tr_torrent>>{};
-
-    auto tm = tr_torrent_metainfo{};
-    EXPECT_TRUE(tm.parse_torrent_file(TorrentFile));
-    owned.emplace_back(std::make_unique<tr_torrent>(std::move(tm)));
-    auto* const tor = owned.back().get();
-
-    // EXPECT_EQ("TEST_BD_VOLUME/����1.jpg",tm.files_.path(14));
-    // EXPECT_EQ("TEST_BD_VOLUME/����2.jpg",tm.files_.path(15));
-    EXPECT_EQ("TEST_BD_VOLUME/����1.jpg",tor->file_subpath(14));
-    EXPECT_EQ("TEST_BD_VOLUME/����2.jpg",tor->file_subpath(15));
-}
-
 TEST_F(TorrentsTest, simpleTests)
 {
     auto constexpr* const TorrentFile = LIBTRANSMISSION_TEST_ASSETS_DIR "/Android-x86 8.1 r6 iso.torrent";
@@ -160,4 +144,20 @@ TEST_F(TorrentsPieceSpanTest, exposesFilePieceSpan)
     auto file_view = tr_torrentFile(tor, 0);
     EXPECT_EQ(file_view.beginPiece, 0);
     EXPECT_EQ(file_view.endPiece, 32);
+}
+
+TEST_F(TorrentsTest, utf8Test)
+{
+    auto constexpr* const TorrentFile = LIBTRANSMISSION_TEST_ASSETS_DIR "/bad-utf8.torrent";
+    auto owned = std::vector<std::unique_ptr<tr_torrent>>{};
+
+    auto tm = tr_torrent_metainfo{};
+    EXPECT_TRUE(tm.parse_torrent_file(TorrentFile));
+    owned.emplace_back(std::make_unique<tr_torrent>(std::move(tm)));
+    auto* const tor = owned.back().get();
+
+    // EXPECT_EQ("TEST_BD_VOLUME/����1.jpg",tm.files_.path(14));
+    // EXPECT_EQ("TEST_BD_VOLUME/����2.jpg",tm.files_.path(15));
+    EXPECT_EQ("TEST_BD_VOLUME/����1.jpg",tor->file_subpath(14));
+    EXPECT_EQ("TEST_BD_VOLUME/����2.jpg",tor->file_subpath(15));
 }
