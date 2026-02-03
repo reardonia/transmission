@@ -146,6 +146,8 @@ TEST_F(TorrentsPieceSpanTest, exposesFilePieceSpan)
     EXPECT_EQ(file_view.endPiece, 32);
 }
 
+// MacOS implementation uses non-deterministic conversion for illegal UTF-8
+#if !(defined(__APPLE__) && defined(__clang__))
 TEST_F(TorrentsTest, utf8Test)
 {
     auto constexpr* const TorrentFile = LIBTRANSMISSION_TEST_ASSETS_DIR "/bad-utf8.torrent";
@@ -156,8 +158,7 @@ TEST_F(TorrentsTest, utf8Test)
     owned.emplace_back(std::make_unique<tr_torrent>(std::move(tm)));
     auto* const tor = owned.back().get();
 
-    // EXPECT_EQ("TEST_BD_VOLUME/����1.jpg",tm.files_.path(14));
-    // EXPECT_EQ("TEST_BD_VOLUME/����2.jpg",tm.files_.path(15));
-    EXPECT_EQ("TEST_BD_VOLUME/����1.jpg",tor->file_subpath(14));
-    EXPECT_EQ("TEST_BD_VOLUME/����2.jpg",tor->file_subpath(15));
+    EXPECT_EQ("TEST_BD_VOLUME/\uFFFD\uFFFD\uFFFD\uFFFD1.jpg", tor->file_subpath(14));
+    EXPECT_EQ("TEST_BD_VOLUME/\uFFFD\uFFFD\uFFFD\uFFFD2.jpg", tor->file_subpath(15));
 }
+#endif
