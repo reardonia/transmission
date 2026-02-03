@@ -31,20 +31,20 @@ std::string tr_strv_to_utf8_string(std::string_view sv)
         // 2. We only provide the likely language. If we also supplied
         // suggested encodings, the first one listed could override the
         // others (e.g. cp932 vs cp866).
-//        NSString* convertedString;
-//        NSStringEncoding stringEncoding = [NSString
-//            stringEncodingForData:[NSData dataWithBytes:std::data(sv) length:std::size(sv)]
-//                  encodingOptions:@{
-//                      NSStringEncodingDetectionAllowLossyKey : @NO,
-//                      NSStringEncodingDetectionLikelyLanguageKey : NSLocale.currentLocale.languageCode
-//                  }
-//                  convertedString:&convertedString
-//              usedLossyConversion:nil];
-//
-//        if (stringEncoding && convertedString != nil && convertedString.UTF8String != nullptr)
-//        {
-//            return tr_strv_to_utf8_string(convertedString);
-//        }
+        NSString* convertedString;
+        NSStringEncoding stringEncoding = [NSString
+            stringEncodingForData:[NSData dataWithBytes:std::data(sv) length:std::size(sv)]
+                  encodingOptions:@{
+                      NSStringEncodingDetectionAllowLossyKey : @NO,
+                      NSStringEncodingDetectionLikelyLanguageKey : NSLocale.currentLocale.languageCode
+                  }
+                  convertedString:&convertedString
+              usedLossyConversion:nil];
+
+        if (stringEncoding && convertedString != nil && convertedString.UTF8String != nullptr)
+        {
+            return tr_strv_to_utf8_string(convertedString);
+        }
 
         // invalid encoding
         return tr_strv_replace_invalid(sv);
