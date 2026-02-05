@@ -150,7 +150,7 @@ TEST_F(TorrentsTest, utf8Test)
 {
 // MacOS implementation uses non-deterministic conversion for illegal UTF-8
 #if (defined(__APPLE__) && defined(__clang__))
-    GTEST_SKIP()
+    GTEST_SKIP();
 #endif
     auto constexpr* const TorrentFile = LIBTRANSMISSION_TEST_ASSETS_DIR "/bad-utf8-path.torrent";
     auto owned = std::vector<std::unique_ptr<tr_torrent>>{};
