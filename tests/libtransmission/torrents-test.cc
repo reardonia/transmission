@@ -146,11 +146,13 @@ TEST_F(TorrentsPieceSpanTest, exposesFilePieceSpan)
     EXPECT_EQ(file_view.endPiece, 32);
 }
 
-// MacOS implementation uses non-deterministic conversion for illegal UTF-8
-#if !(defined(__APPLE__) && defined(__clang__))
 TEST_F(TorrentsTest, utf8Test)
 {
-    auto constexpr* const TorrentFile = LIBTRANSMISSION_TEST_ASSETS_DIR "/bad-utf8.torrent";
+// MacOS implementation uses non-deterministic conversion for illegal UTF-8
+#if (defined(__APPLE__) && defined(__clang__))
+    GTEST_SKIP()
+#endif
+    auto constexpr* const TorrentFile = LIBTRANSMISSION_TEST_ASSETS_DIR "/bad-utf8-path.torrent";
     auto owned = std::vector<std::unique_ptr<tr_torrent>>{};
 
     auto tm = tr_torrent_metainfo{};
@@ -158,7 +160,8 @@ TEST_F(TorrentsTest, utf8Test)
     owned.emplace_back(std::make_unique<tr_torrent>(std::move(tm)));
     auto* const tor = owned.back().get();
 
-    EXPECT_EQ("TEST_BD_VOLUME/\uFFFD\uFFFD\uFFFD\uFFFD1.jpg", tor->file_subpath(14));
-    EXPECT_EQ("TEST_BD_VOLUME/\uFFFD\uFFFD\uFFFD\uFFFD2.jpg", tor->file_subpath(15));
+    // good name: bad-utf8-path/πfile.😀😀😀
+    EXPECT_EQ("bad-utf8-path/\u03C0file.\U0001F600\U0001F600\U0001F600", tor->file_subpath(0));
+    // bad name, gets masked to: bad-utf8-path/file�.foo
+    EXPECT_EQ("bad-utf8-path/file\uFFFD.foo", tor->file_subpath(1));
 }
-#endif
